@@ -103,7 +103,7 @@ type tag struct {
 
 // Index indexes a git repo at the specified url.
 func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
-	log.Printf("Indexing repo %s/%s...\n", gRepo.Org, gRepo.Repo)
+	log.Printf("Indexing repo %s/%s@%s\n", gRepo.Org, gRepo.Repo, gRepo.Tag)
 
 	dir, err := os.MkdirTemp(os.TempDir(), "doc-gitter")
 	if err != nil {

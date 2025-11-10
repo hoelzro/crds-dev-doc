@@ -361,7 +361,7 @@ func org(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "Unable to render org template.")
 		return
 	}
-	log.Printf("successfully rendered org template")
+	log.Printf("successfully rendered org template %s/%s:%s", org, repo, foundTag)
 }
 
 func doc(w http.ResponseWriter, r *http.Request) {
@@ -370,7 +370,7 @@ func doc(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Request Received: %s\n", r.URL.Path)
 	org, repo, group, kind, version, tag, err := parseGHURL(r.URL.Path)
 	if err != nil {
-		log.Printf("failed to parse Github path: %v", err)
+		log.Printf("failed to parse Github path %q: %v", r.URL.Path, err)
 		fmt.Fprint(w, "Invalid URL.")
 		return
 	}
