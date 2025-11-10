@@ -17,18 +17,20 @@ limitations under the License.
 package crd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/validation"
 	servervalidation "k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
-	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/validation"
 	"sigs.k8s.io/yaml"
 )
 
@@ -68,7 +70,7 @@ func NewCRDer(data []byte, m ...Modifier) (*CRDer, error) {
 func (c *CRDer) Validate(data []byte) error {
 	sv := getStoredSchema(c.CRD.Spec)
 
-	s, _, err := servervalidation.NewSchemaValidator(sv)
+	s, _, err := servervalidation.NewSchemaValidator(sv.OpenAPIV3Schema)
 	if err != nil {
 		return errors.New(createSchemaValidatorErr)
 	}
@@ -100,18 +102,18 @@ func (c *CRDer) Validate(data []byte) error {
 }
 
 func convertV1ToInternal(data []byte, internal *apiextensions.CustomResourceDefinition, mods ...Modifier) error {
-	crd := &v1.CustomResourceDefinition{}
+	crd := &apiextensionsv1.CustomResourceDefinition{}
 	if err := yaml.Unmarshal(data, crd); err != nil {
 		return err
 	}
-	v1.SetDefaults_CustomResourceDefinition(crd)
-	if err := v1.Convert_v1_CustomResourceDefinition_To_apiextensions_CustomResourceDefinition(crd, internal, nil); err != nil {
+	apiextensionsv1.SetDefaults_CustomResourceDefinition(crd)
+	if err := apiextensionsv1.Convert_v1_CustomResourceDefinition_To_apiextensions_CustomResourceDefinition(crd, internal, nil); err != nil {
 		return err
 	}
 	for _, m := range mods {
 		m(internal)
 	}
-	errList := validation.ValidateCustomResourceDefinition(internal, v1.SchemeGroupVersion)
+	errList := validation.ValidateCustomResourceDefinition(context.Background(), internal)
 	if len(errList) > 0 {
 		return errors.New(errList.ToAggregate().Error())
 	}
@@ -131,7 +133,7 @@ func convertV1Beta1ToInternal(data []byte, internal *apiextensions.CustomResourc
 	for _, m := range mods {
 		m(internal)
 	}
-	errList := validation.ValidateCustomResourceDefinition(internal, v1beta1.SchemeGroupVersion)
+	errList := validation.ValidateCustomResourceDefinition(context.Background(), internal)
 	if len(errList) > 0 {
 		return errors.New(errList.ToAggregate().Error())
 	}
