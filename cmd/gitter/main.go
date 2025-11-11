@@ -21,7 +21,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -56,6 +55,10 @@ const (
 
 	listenAddrEnv     = "GITTER_LISTEN_ADDR"
 	defaultListenAddr = ":5002"
+
+	maxFileSize = 100 * 1024 // 100 KB
+	maxRuntime  = 1 * time.Minute
+	maxTagAge   = 4 * 365 * 24 * time.Hour // 4 years
 )
 
 var (
@@ -129,6 +132,9 @@ func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
 		return fmt.Errorf("%w: please wait %s", ErrRateLimitExceeded, delay)
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), maxRuntime)
+	defer cancel()
+
 	dir, err := os.MkdirTemp(os.TempDir(), "doc-gitter-*")
 	if err != nil {
 		return err
@@ -149,7 +155,8 @@ func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
 		cloneOpts.ReferenceName = plumbing.NewTagReferenceName(gRepo.Tag)
 		cloneOpts.SingleBranch = true
 	}
-	repo, err := git.PlainClone(dir, false, cloneOpts)
+
+	repo, err := git.PlainCloneContext(ctx, dir, false, cloneOpts)
 	if err != nil {
 		return fmt.Errorf("git clone error: %w", err)
 	}
@@ -199,13 +206,17 @@ func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
 			log.Printf("Unable to resolve revision: %s (%v)", t.hash.String(), err)
 			continue
 		}
-		r := g.conn.QueryRow(context.Background(), "SELECT id FROM tags WHERE name=$1 AND repo=$2", t.name, fullRepo)
+		if c.Committer.When.Before(time.Now().Add(-1 * maxTagAge)) {
+			log.Printf("Skipping tag %s: too old (%s)", t.name, c.Committer.When)
+			continue
+		}
+		r := g.conn.QueryRow(ctx, "SELECT id FROM tags WHERE name=$1 AND repo=$2", t.name, fullRepo)
 		var tagID int
 		if err := r.Scan(&tagID); err != nil {
 			if !errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("error querying tags from database: %w", err)
 			}
-			r := g.conn.QueryRow(context.Background(), "INSERT INTO tags(name, repo, time) VALUES ($1, $2, $3) RETURNING id", t.name, fullRepo, c.Committer.When)
+			r := g.conn.QueryRow(ctx, "INSERT INTO tags(name, repo, time) VALUES ($1, $2, $3) RETURNING id", t.name, fullRepo, c.Committer.When)
 			if err := r.Scan(&tagID); err != nil {
 				return fmt.Errorf("error inserting tag into database: %w", err)
 			}
@@ -220,7 +231,7 @@ func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
 			for _, crd := range repoCRDs {
 				allArgs = append(allArgs, crd.Group, crd.Version, crd.Kind, tagID, crd.Filename, crd.CRD)
 			}
-			if _, err := g.conn.Exec(context.Background(), buildInsert("INSERT INTO crds(\"group\", version, kind, tag_id, filename, data) VALUES ", crdArgCount, len(repoCRDs))+"ON CONFLICT DO NOTHING", allArgs...); err != nil {
+			if _, err := g.conn.Exec(ctx, buildInsert("INSERT INTO crds(\"group\", version, kind, tag_id, filename, data) VALUES ", crdArgCount, len(repoCRDs))+"ON CONFLICT DO NOTHING", allArgs...); err != nil {
 				return fmt.Errorf("error inserting CRDs: %s@%s (%v)", repo, t.name, err)
 			}
 		}
@@ -276,7 +287,19 @@ func getCRDsFromTag(dir string, tag string, hash *plumbing.Hash, w *git.Worktree
 func getYAMLs(greps []git.GrepResult, dir string) map[string][][]byte {
 	allCRDs := map[string][][]byte{}
 	for _, res := range greps {
-		b, err := ioutil.ReadFile(dir + "/" + res.FileName)
+		fi, err := os.Stat(dir + "/" + res.FileName)
+		if err != nil {
+			log.Printf("failed to stat CRD file %s: %v", res.FileName, err)
+			continue
+		}
+
+		if fi.Size() > maxFileSize {
+			allCRDs[res.FileName] = [][]byte{}
+			log.Printf("skipping CRD file %s: file size %d exceeds limit %d", res.FileName, fi.Size(), maxFileSize)
+			continue
+		}
+
+		b, err := os.ReadFile(dir + "/" + res.FileName)
 		if err != nil {
 			log.Printf("failed to read CRD file: %s", res.FileName)
 			continue
@@ -290,12 +313,14 @@ func getYAMLs(greps []git.GrepResult, dir string) map[string][][]byte {
 
 		allCRDs[res.FileName] = yamls
 	}
+
 	return allCRDs
 }
 
 func splitYAML(file []byte, filename string) ([][]byte, error) {
+	errCount := 0
+
 	var yamls [][]byte
-	var err error = nil
 	defer func() {
 		if err := recover(); err != nil {
 			yamls = make([][]byte, 0)
@@ -305,24 +330,32 @@ func splitYAML(file []byte, filename string) ([][]byte, error) {
 
 	decoder := yaml.NewDecoder(bytes.NewReader(file))
 	for {
-		var node map[string]interface{}
-		err := decoder.Decode(&node)
-		if err == io.EOF {
-			break
+		if errCount > 10 {
+			return nil, fmt.Errorf("encountered too many errors while processing yaml file: %s", filename)
 		}
-		if err != nil {
-			log.Printf("failed to decode part of CRD file: %s\n%s", filename, err)
+
+		node := map[string]any{}
+		if err := decoder.Decode(&node); err != nil {
+			if err == io.EOF {
+				break
+			}
+
+			log.Printf("error #%d: failed to decode part of CRD file: %s\n%s", errCount, filename, err)
+			errCount++
 			continue
 		}
 
 		doc, err := yaml.Marshal(node)
 		if err != nil {
-			log.Printf("failed to encode part of CRD file: %s\n%s", filename, err)
+			log.Printf("error #%d: failed to encode part of CRD file: %s\n%s", errCount, filename, err)
+			errCount++
 			continue
 		}
+
 		yamls = append(yamls, doc)
 	}
-	return yamls, err
+
+	return yamls, nil
 }
 
 func buildInsert(query string, argsPerInsert, numInsert int) string {
