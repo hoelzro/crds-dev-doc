@@ -30,6 +30,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crdsdev/doc/pkg/crd"
@@ -39,6 +40,7 @@ import (
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/pkg/errors"
+	"golang.org/x/time/rate"
 	"gopkg.in/square/go-jose.v2/json"
 	yaml "gopkg.in/yaml.v3"
 )
@@ -56,7 +58,11 @@ const (
 	defaultListenAddr = ":5002"
 )
 
-var ErrNoTagFound = errors.New("no tag found")
+var (
+	ErrNoTagFound         = errors.New("no tag found")
+	ErrIndexingInProgress = errors.New("indexing already in progress")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
+)
 
 func main() {
 	dsn := os.Getenv("CRDS_DEV_STORAGE_DSN")
@@ -73,7 +79,9 @@ func main() {
 		panic(err)
 	}
 	gitter := &Gitter{
-		conn: pool,
+		conn:    pool,
+		locks:   sync.Map{},
+		limiter: rate.NewLimiter(rate.Every(2*time.Minute), 5),
 	}
 	rpc.Register(gitter)
 	rpc.HandleHTTP()
@@ -89,12 +97,15 @@ func main() {
 	}
 
 	log.Println("Starting gitter on", listenAddr)
+	log.Println("Limiter set to", gitter.limiter.Limit())
 	http.Serve(l, nil)
 }
 
 // Gitter indexes git repos.
 type Gitter struct {
-	conn *pgxpool.Pool
+	conn    *pgxpool.Pool
+	locks   sync.Map
+	limiter *rate.Limiter
 }
 
 type tag struct {
@@ -105,6 +116,19 @@ type tag struct {
 
 // Index indexes a git repo at the specified url.
 func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
+	key := fmt.Sprintf("%s/%s@%s", gRepo.Org, gRepo.Repo, gRepo.Tag)
+	if _, ok := g.locks.LoadOrStore(key, 1); ok {
+		return fmt.Errorf("%w: %s", ErrIndexingInProgress, key)
+	}
+	defer g.locks.Delete(key)
+
+	if rsv := g.limiter.Reserve(); !rsv.OK() {
+		return fmt.Errorf("%w: burst exceeded", ErrRateLimitExceeded)
+	} else if delay := rsv.Delay(); delay > 0 {
+		rsv.Cancel()
+		return fmt.Errorf("%w: please wait %s", ErrRateLimitExceeded, delay)
+	}
+
 	dir, err := os.MkdirTemp(os.TempDir(), "doc-gitter-*")
 	if err != nil {
 		return err
