@@ -110,6 +110,16 @@ type docData struct {
 	Schema      apiextensions.JSONSchemaProps
 }
 
+type listGVKData struct {
+	Page    pageData
+	Group   string
+	Version string
+	Kind    string
+
+	Total    int
+	Repotags map[string][]string
+}
+
 type orgData struct {
 	Page  pageData
 	Repo  string
@@ -208,6 +218,7 @@ func start() {
 	staticHandler := http.StripPrefix("/static/", http.FileServer(http.Dir("./static/")))
 	r.HandleFunc("/", home)
 	r.PathPrefix("/static/").Handler(staticHandler)
+	r.HandleFunc("/gvk/{group}/{version}/{kind}", listGVK)
 	r.HandleFunc("/repo/github.com/{org}/{repo}@{tag}", org)
 	r.HandleFunc("/repo/github.com/{org}/{repo}", org)
 	r.HandleFunc("/raw/github.com/{org}/{repo}@{tag}", raw)
@@ -224,6 +235,47 @@ func home(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Print("successfully rendered home page")
+}
+
+func listGVK(w http.ResponseWriter, r *http.Request) {
+	parameters := mux.Vars(r)
+	group := parameters["group"]
+	version := parameters["version"]
+	kind := parameters["kind"]
+
+	rows, err := db.Query(context.Background(), "SELECT t.repo, t.name FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE c.group=$1 AND c.version=$2 AND c.kind=$3;", group, version, kind)
+	if err != nil {
+		log.Printf("failed to get repos for %s/%s/%s: %v", group, version, kind, err)
+		fmt.Fprint(w, "Unable to get repositories for supplied GVK.")
+		return
+	}
+
+	data := listGVKData{
+		Page:     getPageData(r, fmt.Sprintf("%s/%s.%s", group, version, kind), false),
+		Group:    group,
+		Version:  version,
+		Kind:     kind,
+		Repotags: map[string][]string{},
+	}
+
+	for rows.Next() {
+		var repo, tag string
+		if err := rows.Scan(&repo, &tag); err != nil {
+			log.Printf("failed to scan repo row for %s/%s/%s: %v", group, version, kind, err)
+			fmt.Fprint(w, "Unable to get repositories for supplied GVK.")
+			return
+		}
+
+		data.Repotags[repo] = append(data.Repotags[repo], tag)
+		data.Total++
+	}
+
+	if err := page.HTML(w, http.StatusOK, "list_gvk", data); err != nil {
+		log.Printf("listGVKTemplate.Execute(): %v", err)
+		fmt.Fprint(w, "Unable to render list GVK template.")
+		return
+	}
+	log.Printf("successfully rendered list GVK template for %s/%s/%s", group, version, kind)
 }
 
 func raw(w http.ResponseWriter, r *http.Request) {
