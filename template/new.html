@@ -1,6 +1,10 @@
 <div class="content-wrapper">
     <div class="container">
         <h2>Oops!</h2>
-        <p>Looks like we haven't indexed this version of this repo yet. Check back in a few minutes.</p>
+        {{ if .Page.IndexerAlive }}
+        <p>Looks like we haven't indexed this version of this repo yet. Reload this page in a few minutes.</p>
+        {{ else }}
+        <p>Our indexing service is unavailable. Please try again later.</p>
+        {{ end }}
     </div>
 </div>
