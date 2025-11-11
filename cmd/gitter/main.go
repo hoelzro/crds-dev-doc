@@ -117,6 +117,11 @@ type tag struct {
 	name      string
 }
 
+func (g *Gitter) Ping(_ struct{}, reply *string) error {
+	*reply = "pong"
+	return nil
+}
+
 // Index indexes a git repo at the specified url.
 func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
 	key := fmt.Sprintf("%s/%s@%s", gRepo.Org, gRepo.Repo, gRepo.Tag)
