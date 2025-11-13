@@ -317,7 +317,7 @@ func listGVK(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.Query(context.Background(), "SELECT t.repo, t.name FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE c.group=$1 AND c.version=$2 AND c.kind=$3;", group, version, kind)
 	if err != nil {
 		log.Printf("failed to get repos for %s/%s/%s: %v", group, version, kind, err)
-		fmt.Fprint(w, "Unable to get repositories for supplied GVK.")
+		http.Error(w, "Unable to get repositories for supplied GVK.", http.StatusInternalServerError)
 		return
 	}
 
@@ -341,6 +341,11 @@ func listGVK(w http.ResponseWriter, r *http.Request) {
 		data.Total++
 	}
 
+	if data.Total == 0 {
+		http.Error(w, "GVK not found.", http.StatusNotFound)
+		return
+	}
+
 	if err := page.HTML(w, http.StatusOK, "list_gvk", data); err != nil {
 		log.Printf("listGVKTemplate.Execute(): %v", err)
 		fmt.Fprint(w, "Unable to render list GVK template.")
@@ -357,7 +362,7 @@ func listGroupVersion(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.Query(context.Background(), "SELECT c.kind, COUNT(1) FROM crds c WHERE c.group=$1 AND c.version=$2 GROUP BY c.kind;", group, version)
 	if err != nil {
 		log.Printf("failed to get repos for %s/%s: %v", group, version, err)
-		fmt.Fprint(w, "Unable to get repositories for supplied group-version.")
+		http.Error(w, "Unable to get repositories for supplied group-version.", http.StatusInternalServerError)
 		return
 	}
 
@@ -381,6 +386,11 @@ func listGroupVersion(w http.ResponseWriter, r *http.Request) {
 		data.Total++
 	}
 
+	if data.Total == 0 {
+		http.Error(w, "Group-Version not found.", http.StatusNotFound)
+		return
+	}
+
 	if err := page.HTML(w, http.StatusOK, "list_group_version", data); err != nil {
 		log.Printf("listGroupVersionTemplate.Execute(): %v", err)
 		fmt.Fprint(w, "Unable to render list group-version template.")
@@ -396,7 +406,7 @@ func listGroups(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.Query(context.Background(), "SELECT c.version, COUNT(DISTINCT c.kind) FROM crds c WHERE c.group=$1 GROUP BY c.version;", group)
 	if err != nil {
 		log.Printf("failed to get versions for %s: %v", group, err)
-		fmt.Fprint(w, "Unable to get versions for supplied group.")
+		http.Error(w, "Unable to get versions for supplied group.", http.StatusInternalServerError)
 		return
 	}
 
@@ -419,6 +429,11 @@ func listGroups(w http.ResponseWriter, r *http.Request) {
 		data.Total++
 	}
 
+	if data.Total == 0 {
+		http.Error(w, "Group not found.", http.StatusNotFound)
+		return
+	}
+
 	if err := page.HTML(w, http.StatusOK, "list_groups", data); err != nil {
 		log.Printf("listGroupsTemplate.Execute(): %v", err)
 		fmt.Fprint(w, "Unable to render list groups template.")
@@ -431,7 +446,7 @@ func listAllGroups(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.Query(context.Background(), "SELECT c.group, COUNT(DISTINCT c.version), COUNT(DISTINCT c.kind) FROM crds c GROUP BY c.group ORDER BY c.group;")
 	if err != nil {
 		log.Printf("failed to get all groups: %v", err)
-		fmt.Fprint(w, "Unable to get all groups.")
+		http.Error(w, "Unable to get all groups.", http.StatusInternalServerError)
 		return
 	}
 
@@ -611,7 +626,7 @@ func doc(w http.ResponseWriter, r *http.Request) {
 	org, repo, group, kind, version, tag, err := parseGHURL(strings.TrimPrefix(r.URL.Path, "/repo"))
 	if err != nil {
 		log.Printf("failed to parse Github path %q: %v", r.URL.Path, err)
-		fmt.Fprint(w, "Invalid URL.")
+		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
 	pageData := getPageData(r, fmt.Sprintf("%s.%s/%s", kind, group, version), false)
