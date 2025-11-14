@@ -28,6 +28,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -184,17 +185,36 @@ func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
 	// Get CRDs for each tag
 	tags := []tag{}
 	if err := iter.ForEach(func(obj *plumbing.Reference) error {
+		// Resolve the commit to get the timestamp
+		h, err := repo.ResolveRevision(plumbing.Revision(obj.Hash().String()))
+		if err != nil || h == nil {
+			log.Printf("Unable to resolve revision for tag %s: %s (%v)", obj.Name().Short(), obj.Hash().String(), err)
+			return nil
+		}
+		c, err := repo.CommitObject(*h)
+		if err != nil || c == nil {
+			log.Printf("Unable to get commit object for tag %s: %s (%v)", obj.Name().Short(), obj.Hash().String(), err)
+			return nil
+		}
+
+		if c.Committer.When.Before(time.Now().Add(-1 * maxTagAge)) {
+			log.Printf("Skipping tag %s: too old (%s)", obj.Name().Short(), c.Committer.When)
+			return nil
+		}
+
 		if gRepo.Tag == "" {
 			tags = append(tags, tag{
-				hash: obj.Hash(),
-				name: obj.Name().Short(),
+				timestamp: c.Committer.When,
+				hash:      obj.Hash(),
+				name:      obj.Name().Short(),
 			})
 			return nil
 		}
 		if obj.Name().Short() == gRepo.Tag {
 			tags = append(tags, tag{
-				hash: obj.Hash(),
-				name: obj.Name().Short(),
+				timestamp: c.Committer.When,
+				hash:      obj.Hash(),
+				name:      obj.Name().Short(),
 			})
 			iter.Close()
 		}
@@ -207,7 +227,11 @@ func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
 		log.Printf("No tags found for repo %s/%s@%s\n", gRepo.Org, gRepo.Repo, gRepo.Tag)
 		return fmt.Errorf("repo %s/%s@%s: %w", gRepo.Org, gRepo.Repo, gRepo.Tag, ErrNoTagFound)
 	}
+
 	log.Printf("Found %d tags for repo %s/%s\n", len(tags), gRepo.Org, gRepo.Repo)
+	sort.Slice(tags, func(i, j int) bool {
+		return tags[i].timestamp.After(tags[j].timestamp)
+	})
 
 	for _, t := range tags {
 		h, err := repo.ResolveRevision(plumbing.Revision(t.hash.String()))
@@ -218,10 +242,6 @@ func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
 		c, err := repo.CommitObject(*h)
 		if err != nil || c == nil {
 			log.Printf("Unable to resolve revision: %s (%v)", t.hash.String(), err)
-			continue
-		}
-		if c.Committer.When.Before(time.Now().Add(-1 * maxTagAge)) {
-			log.Printf("Skipping tag %s: too old (%s)", t.name, c.Committer.When)
 			continue
 		}
 		r := g.conn.QueryRow(ctx, "SELECT id FROM tags WHERE name=$1 AND repo=$2", t.name, fullRepo)
