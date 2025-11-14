@@ -153,6 +153,13 @@ type listAllGroupStats struct {
 	KindCount    int
 }
 
+type listTagsData struct {
+	Page  pageData
+	Repo  string
+	Tags  []tagInfo
+	Total int
+}
+
 type orgData struct {
 	Page  pageData
 	Repo  string
@@ -291,7 +298,7 @@ func start() {
 	r.HandleFunc("/gvk/{group}", listGroups)
 	r.HandleFunc("/gvk", listAllGroups)
 	r.HandleFunc("/repo/github.com/{org}/{repo}@{tag:.+}", org)
-	r.HandleFunc("/repo/github.com/{org}/{repo}", org)
+	r.HandleFunc("/repo/github.com/{org}/{repo}", listTags)
 	r.HandleFunc("/raw/github.com/{org}/{repo}@{tag:.+}", raw)
 	r.HandleFunc("/raw/github.com/{org}/{repo}", raw)
 	r.PathPrefix("/").HandlerFunc(doc)
@@ -529,6 +536,49 @@ func raw(w http.ResponseWriter, r *http.Request) {
 type tagInfo struct {
 	Name      string
 	Timestamp time.Time
+}
+
+func listTags(w http.ResponseWriter, r *http.Request) {
+	parameters := mux.Vars(r)
+	org := parameters["org"]
+	repo := parameters["repo"]
+	pageData := getPageData(r, fmt.Sprintf("%s/%s Tags", org, repo), false)
+	fullRepo := fmt.Sprintf("%s/%s/%s", "github.com", org, repo)
+
+	rows, err := db.Query(context.Background(), "SELECT name, time FROM tags WHERE LOWER(repo)=LOWER($1) ORDER BY time DESC;", fullRepo)
+	if err != nil {
+		log.Printf("failed to get tags for %s : %v", repo, err)
+		http.Error(w, "Unable to get tags.", http.StatusInternalServerError)
+		return
+	}
+
+	tags := []tagInfo{}
+	for rows.Next() {
+		var t string
+		var ts time.Time
+		if err := rows.Scan(&t, &ts); err != nil {
+			log.Printf("listTags(): %v", err)
+			fmt.Fprint(w, "Unable to render tags.")
+			return
+		}
+
+		tags = append(tags, tagInfo{
+			Name:      t,
+			Timestamp: ts,
+		})
+	}
+
+	if err := page.HTML(w, http.StatusOK, "list_tags", listTagsData{
+		Page:  pageData,
+		Repo:  strings.Join([]string{org, repo}, "/"),
+		Tags:  tags,
+		Total: len(tags),
+	}); err != nil {
+		log.Printf("listTagsTemplate.Execute(): %v", err)
+		fmt.Fprint(w, "Unable to render list tags template.")
+		return
+	}
+	log.Printf("successfully rendered list tags template for %s/%s", org, repo)
 }
 
 func org(w http.ResponseWriter, r *http.Request) {
