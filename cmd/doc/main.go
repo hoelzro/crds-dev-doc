@@ -321,7 +321,7 @@ func listGVK(w http.ResponseWriter, r *http.Request) {
 	version := parameters["version"]
 	kind := parameters["kind"]
 
-	rows, err := db.Query(context.Background(), "SELECT t.repo, t.name, t.time FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE c.group=$1 AND c.version=$2 AND c.kind=$3 ORDER BY t.time DESC;", group, version, kind)
+	rows, err := db.Query(r.Context(), "SELECT t.repo, t.name, t.time FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE c.group=$1 AND c.version=$2 AND c.kind=$3 ORDER BY t.time DESC;", group, version, kind)
 	if err != nil {
 		log.Printf("failed to get repos for %s/%s/%s: %v", group, version, kind, err)
 		http.Error(w, "Unable to get repositories for supplied GVK.", http.StatusInternalServerError)
@@ -370,7 +370,7 @@ func listGroupVersion(w http.ResponseWriter, r *http.Request) {
 	group := parameters["group"]
 	version := parameters["version"]
 
-	rows, err := db.Query(context.Background(), "SELECT c.kind, COUNT(1) FROM crds c WHERE c.group=$1 AND c.version=$2 GROUP BY c.kind;", group, version)
+	rows, err := db.Query(r.Context(), "SELECT c.kind, COUNT(1) FROM crds c WHERE c.group=$1 AND c.version=$2 GROUP BY c.kind;", group, version)
 	if err != nil {
 		log.Printf("failed to get repos for %s/%s: %v", group, version, err)
 		http.Error(w, "Unable to get repositories for supplied group-version.", http.StatusInternalServerError)
@@ -414,7 +414,7 @@ func listGroups(w http.ResponseWriter, r *http.Request) {
 	parameters := mux.Vars(r)
 	group := parameters["group"]
 
-	rows, err := db.Query(context.Background(), "SELECT c.version, COUNT(DISTINCT c.kind) FROM crds c WHERE c.group=$1 GROUP BY c.version;", group)
+	rows, err := db.Query(r.Context(), "SELECT c.version, COUNT(DISTINCT c.kind) FROM crds c WHERE c.group=$1 GROUP BY c.version;", group)
 	if err != nil {
 		log.Printf("failed to get versions for %s: %v", group, err)
 		http.Error(w, "Unable to get versions for supplied group.", http.StatusInternalServerError)
@@ -454,7 +454,7 @@ func listGroups(w http.ResponseWriter, r *http.Request) {
 }
 
 func listAllGroups(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.Query(context.Background(), "SELECT c.group, COUNT(DISTINCT c.version), COUNT(DISTINCT c.kind) FROM crds c GROUP BY c.group ORDER BY c.group;")
+	rows, err := db.Query(r.Context(), "SELECT c.group, COUNT(DISTINCT c.version), COUNT(DISTINCT c.kind) FROM crds c GROUP BY c.group ORDER BY c.group;")
 	if err != nil {
 		log.Printf("failed to get all groups: %v", err)
 		http.Error(w, "Unable to get all groups.", http.StatusInternalServerError)
@@ -500,9 +500,9 @@ func raw(w http.ResponseWriter, r *http.Request) {
 	var rows pgx.Rows
 	var err error
 	if tag == "" {
-		rows, err = db.Query(context.Background(), "SELECT c.data::jsonb FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE LOWER(t.repo)=LOWER($1) AND t.id = (SELECT id FROM tags WHERE LOWER(repo) = LOWER($1) ORDER BY time DESC LIMIT 1);", fullRepo)
+		rows, err = db.Query(r.Context(), "SELECT c.data::jsonb FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE LOWER(t.repo)=LOWER($1) AND t.id = (SELECT id FROM tags WHERE LOWER(repo) = LOWER($1) ORDER BY time DESC LIMIT 1);", fullRepo)
 	} else {
-		rows, err = db.Query(context.Background(), "SELECT c.data::jsonb FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE LOWER(t.repo)=LOWER($1) AND t.name=$2;", fullRepo, tag)
+		rows, err = db.Query(r.Context(), "SELECT c.data::jsonb FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE LOWER(t.repo)=LOWER($1) AND t.name=$2;", fullRepo, tag)
 	}
 
 	var res []byte
@@ -549,7 +549,7 @@ func listTags(w http.ResponseWriter, r *http.Request) {
 	pageData := getPageData(r, fmt.Sprintf("%s/%s Tags", org, repo), false)
 	fullRepo := fmt.Sprintf("%s/%s/%s", "github.com", org, repo)
 
-	rows, err := db.Query(context.Background(), "SELECT name, time FROM tags WHERE LOWER(repo)=LOWER($1) ORDER BY time DESC;", fullRepo)
+	rows, err := db.Query(r.Context(), "SELECT name, time FROM tags WHERE LOWER(repo)=LOWER($1) ORDER BY time DESC;", fullRepo)
 	if err != nil {
 		log.Printf("failed to get tags for %s : %v", repo, err)
 		http.Error(w, "Unable to get tags.", http.StatusInternalServerError)
@@ -597,7 +597,7 @@ func org(w http.ResponseWriter, r *http.Request) {
 	pageData.Title += fmt.Sprintf("@%s", tag)
 	b.Queue("SELECT t.name, c.group, c.version, c.kind FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE LOWER(t.repo)=LOWER($1) AND t.name=$2;", fullRepo, tag)
 	b.Queue("SELECT name, time FROM tags WHERE LOWER(repo)=LOWER($1) ORDER BY time DESC;", fullRepo)
-	br := db.SendBatch(context.Background(), b)
+	br := db.SendBatch(r.Context(), b)
 	defer br.Close()
 	c, err := br.Query()
 	if err != nil {
@@ -703,9 +703,9 @@ func doc(w http.ResponseWriter, r *http.Request) {
 	fullRepo := fmt.Sprintf("%s/%s/%s", "github.com", org, repo)
 	var c pgx.Row
 	if tag == "" {
-		c = db.QueryRow(context.Background(), "SELECT t.name, c.data::jsonb FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE LOWER(t.repo)=LOWER($1) AND t.id = (SELECT id FROM tags WHERE repo = $1 ORDER BY time DESC LIMIT 1) AND c.group=$2 AND c.version=$3 AND c.kind=$4;", fullRepo, group, version, kind)
+		c = db.QueryRow(r.Context(), "SELECT t.name, c.data::jsonb FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE LOWER(t.repo)=LOWER($1) AND t.id = (SELECT id FROM tags WHERE repo = $1 ORDER BY time DESC LIMIT 1) AND c.group=$2 AND c.version=$3 AND c.kind=$4;", fullRepo, group, version, kind)
 	} else {
-		c = db.QueryRow(context.Background(), "SELECT t.name, c.data::jsonb FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE LOWER(t.repo)=LOWER($1) AND t.name=$2 AND c.group=$3 AND c.version=$4 AND c.kind=$5;", fullRepo, tag, group, version, kind)
+		c = db.QueryRow(r.Context(), "SELECT t.name, c.data::jsonb FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE LOWER(t.repo)=LOWER($1) AND t.name=$2 AND c.group=$3 AND c.version=$4 AND c.kind=$5;", fullRepo, tag, group, version, kind)
 	}
 	foundTag := tag
 	if err := c.Scan(&foundTag, crd); err != nil {
