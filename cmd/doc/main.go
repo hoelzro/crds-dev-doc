@@ -121,7 +121,7 @@ type listGVKData struct {
 	Kind    string
 
 	Total    int
-	Repotags map[string][]string
+	Repotags map[string][]tagInfo
 }
 
 type listGroupVersionData struct {
@@ -321,7 +321,7 @@ func listGVK(w http.ResponseWriter, r *http.Request) {
 	version := parameters["version"]
 	kind := parameters["kind"]
 
-	rows, err := db.Query(context.Background(), "SELECT t.repo, t.name FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE c.group=$1 AND c.version=$2 AND c.kind=$3;", group, version, kind)
+	rows, err := db.Query(context.Background(), "SELECT t.repo, t.name, t.time FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE c.group=$1 AND c.version=$2 AND c.kind=$3 ORDER BY t.time DESC;", group, version, kind)
 	if err != nil {
 		log.Printf("failed to get repos for %s/%s/%s: %v", group, version, kind, err)
 		http.Error(w, "Unable to get repositories for supplied GVK.", http.StatusInternalServerError)
@@ -333,18 +333,22 @@ func listGVK(w http.ResponseWriter, r *http.Request) {
 		Group:    group,
 		Version:  version,
 		Kind:     kind,
-		Repotags: map[string][]string{},
+		Repotags: map[string][]tagInfo{},
 	}
 
 	for rows.Next() {
 		var repo, tag string
-		if err := rows.Scan(&repo, &tag); err != nil {
+		var timestamp time.Time
+		if err := rows.Scan(&repo, &tag, &timestamp); err != nil {
 			log.Printf("failed to scan repo row for %s/%s/%s: %v", group, version, kind, err)
 			fmt.Fprint(w, "Unable to get repositories for supplied GVK.")
 			return
 		}
 
-		data.Repotags[repo] = append(data.Repotags[repo], tag)
+		data.Repotags[repo] = append(data.Repotags[repo], tagInfo{
+			Name:      tag,
+			Timestamp: timestamp,
+		})
 		data.Total++
 	}
 

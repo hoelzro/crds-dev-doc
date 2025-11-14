@@ -19,8 +19,8 @@
 
     const { Group, Version, Kind, Repotags, } = {{ . }};
     const data = Object.keys(Repotags).flatMap(repo => {
-        return Repotags[repo].map(tag => {
-            return { Repo: repo, Tag: tag };
+        return Repotags[repo].map(tagInfo => {
+            return { Repo: repo, Tag: tagInfo.Name, Timestamp: tagInfo.Timestamp };
         });
     });
 
@@ -33,6 +33,10 @@
             Header: 'Tag',
             accessor: 'Tag',
             Cell: ({ row: { original }, value }) => html`<a href=${`/repo/${original.Repo}/${Group}/${Kind}/${Version}@${original.Tag}`}>${value}</a>`,
+        },
+        {
+            Header: 'Timestamp',
+            accessor: 'Timestamp',
         },
     ];
 
