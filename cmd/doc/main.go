@@ -158,7 +158,7 @@ type orgData struct {
 	Repo  string
 	Tag   string
 	At    string
-	Tags  []string
+	Tags  []tagInfo
 	CRDs  map[string]models.RepoCRD
 	Total int
 }
@@ -526,6 +526,11 @@ func raw(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type tagInfo struct {
+	Name      string
+	Timestamp time.Time
+}
+
 func org(w http.ResponseWriter, r *http.Request) {
 	parameters := mux.Vars(r)
 	org := parameters["org"]
@@ -540,7 +545,7 @@ func org(w http.ResponseWriter, r *http.Request) {
 		pageData.Title += fmt.Sprintf("@%s", tag)
 		b.Queue("SELECT t.name, c.group, c.version, c.kind FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE LOWER(t.repo)=LOWER($1) AND t.name=$2;", fullRepo, tag)
 	}
-	b.Queue("SELECT name FROM tags WHERE LOWER(repo)=LOWER($1) ORDER BY time DESC;", fullRepo)
+	b.Queue("SELECT name, time FROM tags WHERE LOWER(repo)=LOWER($1) ORDER BY time DESC;", fullRepo)
 	br := db.SendBatch(context.Background(), b)
 	defer br.Close()
 	c, err := br.Query()
@@ -554,6 +559,7 @@ func org(w http.ResponseWriter, r *http.Request) {
 	}
 	repoCRDs := map[string]models.RepoCRD{}
 	foundTag := tag
+	foundTagTimestamp := time.Time{}
 	for c.Next() {
 		var t, g, v, k string
 		if err := c.Scan(&t, &g, &v, &k); err != nil {
@@ -576,18 +582,22 @@ func org(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	tags := []string{}
+	tags := []tagInfo{}
 	tagExists := false
 	for c.Next() {
 		var t string
-		if err := c.Scan(&t); err != nil {
+		var ts time.Time
+		if err := c.Scan(&t, &ts); err != nil {
 			log.Printf("newTemplate.Execute(): %v", err)
 			fmt.Fprint(w, "Unable to render new template.")
 		}
 		if !tagExists && t == tag {
 			tagExists = true
 		}
-		tags = append(tags, t)
+		tags = append(tags, tagInfo{
+			Name:      t,
+			Timestamp: ts,
+		})
 	}
 	if len(tags) == 0 || (!tagExists && tag != "") {
 		tryIndex(models.GitterRepo{
@@ -602,12 +612,21 @@ func org(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if foundTag == "" {
-		foundTag = tags[0]
+		foundTag = tags[0].Name
+		foundTagTimestamp = tags[0].Timestamp
+	} else {
+		for _, t := range tags {
+			if t.Name == foundTag {
+				foundTagTimestamp = t.Timestamp
+				break
+			}
+		}
 	}
 	if err := page.HTML(w, http.StatusOK, "org", orgData{
 		Page:  pageData,
 		Repo:  strings.Join([]string{org, repo}, "/"),
 		Tag:   foundTag,
+		At:    foundTagTimestamp.Format(time.RFC3339),
 		Tags:  tags,
 		CRDs:  repoCRDs,
 		Total: len(repoCRDs),

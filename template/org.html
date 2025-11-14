@@ -4,16 +4,17 @@
             <h1><a href="/repo/github.com/{{ .Repo }}@{{ .Tag }}">{{ .Repo }}@{{ .Tag }}</a></h1>
             {{ if .Tag }}
                 Source: <a href="https://github.com/{{ .Repo }}/tree/{{ .Tag }}"><span class="label label-primary">github.com/{{ .Repo }}/tree/{{ .Tag }}</span></a>
+                <br>Tag created at {{ .At }}
             {{ else }}
                 Source: <a href="https://github.com/{{ .Repo }}"><span class="label label-primary">github.com/{{ .Repo }}</span></a>
             {{ end }}
         </div>
         <select class="form-control w-md-400 w-sm-full mb-md-10 mb-5" onchange="handleSelect(this)">
-            {{ $actual := .Tag }}{{ $repo := .Repo }}{{ range $name := .Tags }}
-                {{ if eq $name $actual }}
-                <option value="/repo/github.com/{{ $repo }}@{{ $name }}" selected="selected">{{ $name }}</option>
+            {{ $actual := .Tag }}{{ $repo := .Repo }}{{ range $tag := .Tags }}
+                {{ if eq $tag.Name $actual }}
+                <option value="/repo/github.com/{{ $repo }}@{{ $tag.Name }}" selected="selected">{{ $tag.Name }} ({{ $tag.Timestamp }})</option>
                 {{ else }}
-                <option value="/repo/github.com/{{ $repo }}@{{ $name }}" >{{ $name }}</option>
+                <option value="/repo/github.com/{{ $repo }}@{{ $tag.Name }}" >{{ $tag.Name }} ({{ $tag.Timestamp }})</option>
                 {{ end }}
             {{ end }}
           </select>
@@ -37,7 +38,7 @@
     const { html } = htmReact;
     const { useTable, useSortBy, useGlobalFilter  } = ReactTable;
 
-    const { Repo, CRDs, Tag, At, } = {{ . }};
+    const { Repo, CRDs, Tag, } = {{ . }};
     const data = Object.keys(CRDs).map(key => CRDs[key]);
 
     const columns = [
@@ -83,7 +84,7 @@
 
         return html`
         <form class="form-inline w-md-400 w-sm-full mb-md-10 mb-5" onSubmit=${e => e.preventDefault}>
-            <input type="search" class="form-control" placeholder="e.g. CacheCluster, acm.aws" onInput=${e => setGlobalFilter(e.target.value)} value=${globalFilter}></input>
+            <input type="search" class="form-control" placeholder="Filter by any field value" onInput=${e => setGlobalFilter(e.target.value)} value=${globalFilter}></input>
         </form>
         <div class="table-responsive">
             <table class="table table-striped table-outer-bordered" ...${getTableProps()}>
