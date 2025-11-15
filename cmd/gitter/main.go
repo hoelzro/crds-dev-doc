@@ -152,7 +152,7 @@ func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
 	checkErr := g.conn.QueryRow(ctx, "SELECT time, error FROM attempts WHERE repo = $1 AND tag = $2 AND time > $3 LIMIT 1", fullRepo, gRepo.Tag, time.Now().Add(-minRetryInterval)).Scan(&recentFailureTime, &attemptErrorReason)
 	if checkErr == nil {
 		g.locks.Delete(key)
-		*reply = fmt.Sprintf("indexing failed: %s", attemptErrorReason)
+		*reply = fmt.Sprintf("indexing %s failed: %s", fullRepo, attemptErrorReason)
 		return nil
 	} else if !errors.Is(checkErr, pgx.ErrNoRows) {
 		g.locks.Delete(key)
