@@ -364,13 +364,13 @@ func getCRDsFromTag(dir string, tag string, hash *plumbing.Hash, w *git.Worktree
 		for _, y := range yamls {
 			crder, err := crd.NewCRDer(y, crd.StripLabels(), crd.StripAnnotations(), crd.StripConversion())
 			if err != nil || crder.CRD == nil {
-				fmt.Printf("Skipping CRD YAML file %s@%s: error parsing: %v", file, hash.String(), err)
+				fmt.Printf("Skipping CRD YAML file %s@%s: error parsing: %v\n", file, hash.String(), err)
 				continue
 			}
 
 			cbytes, err := json.Marshal(crder.CRD)
 			if err != nil {
-				fmt.Printf("Skipping CRD YAML file %s@%s: error marshaling: %v", file, hash.String(), err)
+				fmt.Printf("Skipping CRD YAML file %s@%s: error marshaling: %v\n", file, hash.String(), err)
 				continue
 			}
 
