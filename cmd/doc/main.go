@@ -32,6 +32,7 @@ import (
 
 	crdutil "github.com/crdsdev/doc/pkg/crd"
 	"github.com/crdsdev/doc/pkg/models"
+	"github.com/crdsdev/doc/pkg/validation"
 	"github.com/gorilla/mux"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
@@ -334,10 +335,10 @@ func start() {
 	r.HandleFunc("/gvk/{group}/{version}", listGroupVersion)
 	r.HandleFunc("/gvk/{group}", listGroups)
 	r.HandleFunc("/gvk", listAllGroups)
-	r.HandleFunc("/repo/github.com/{org}/{repo}@{tag:.+}", org)
+	r.HandleFunc("/repo/github.com/{org}/{repo}@{tag:[A-Za-z0-9._/+-]+}", org)
 	r.HandleFunc("/repo/github.com/{org}/{repo}", listTags)
 	r.HandleFunc("/recent", listRecentlyIndexedRepos)
-	r.HandleFunc("/raw/github.com/{org}/{repo}@{tag:.+}", raw)
+	r.HandleFunc("/raw/github.com/{org}/{repo}@{tag:[A-Za-z0-9._/+-]+}", raw)
 	r.HandleFunc("/raw/github.com/{org}/{repo}", raw)
 	r.PathPrefix("/").HandlerFunc(doc)
 	log.Fatal(http.ListenAndServe(listenAddr, r))
@@ -538,6 +539,15 @@ func raw(w http.ResponseWriter, r *http.Request) {
 	repo := parameters["repo"]
 	tag := parameters["tag"]
 
+	// Validate tag if present
+	if tag != "" {
+		if err := validation.ValidateTag(tag); err != nil {
+			log.Printf("invalid tag format in raw handler: %q from %s", tag, r.RemoteAddr)
+			http.Error(w, "invalid tag format", http.StatusBadRequest)
+			return
+		}
+	}
+
 	fullRepo := fmt.Sprintf("%s/%s/%s", "github.com", org, repo)
 	var rows pgx.Rows
 	var err error
@@ -700,6 +710,14 @@ func org(w http.ResponseWriter, r *http.Request) {
 	org := parameters["org"]
 	repo := parameters["repo"]
 	tag := parameters["tag"]
+
+	// Validate tag format
+	if err := validation.ValidateTag(tag); err != nil {
+		log.Printf("invalid tag format in org handler: %q from %s", tag, r.RemoteAddr)
+		http.Error(w, "invalid tag format", http.StatusBadRequest)
+		return
+	}
+
 	pageData := getPageData(r, fmt.Sprintf("%s/%s", org, repo), false)
 	fullRepo := fmt.Sprintf("%s/%s/%s", "github.com", org, repo)
 
@@ -820,6 +838,15 @@ func doc(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
+
+	if tag != "" {
+		if err := validation.ValidateTag(tag); err != nil {
+			log.Printf("invalid tag format in doc handler: %q from %s", tag, r.RemoteAddr)
+			http.Error(w, "invalid tag format", http.StatusBadRequest)
+			return
+		}
+	}
+
 	pageData := getPageData(r, fmt.Sprintf("%s.%s/%s", kind, group, version), false)
 	fullRepo := fmt.Sprintf("%s/%s/%s", "github.com", org, repo)
 	var c pgx.Row
