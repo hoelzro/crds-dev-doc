@@ -3,7 +3,24 @@ CREATE TABLE tags (
     name VARCHAR(255) NOT NULL,
     repo VARCHAR(255) NOT NULL,
     time TIMESTAMP NOT NULL,
-    UNIQUE(name, repo)
+    hash_sha1 BYTEA NOT NULL CHECK (octet_length(hash_sha1) = 20),
+    alias_tag_id INTEGER REFERENCES tags(id),
+    UNIQUE(name, repo),
+    CHECK (alias_tag_id IS NULL OR alias_tag_id != id)
+);
+
+CREATE INDEX idx_tags_hash_sha1 ON tags(hash_sha1);
+
+CREATE INDEX idx_tags_alias_tag_id ON tags(alias_tag_id);
+
+ALTER TABLE tags ADD CONSTRAINT chk_single_level_alias
+CHECK (
+    alias_tag_id IS NULL OR
+    NOT EXISTS (
+        SELECT 1 FROM tags t2
+        WHERE t2.id = tags.alias_tag_id
+        AND t2.alias_tag_id IS NOT NULL
+    )
 );
 
 CREATE TABLE crds (
