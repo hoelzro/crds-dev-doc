@@ -22,3 +22,15 @@ CREATE TABLE crds (
     data JSONB NOT NULL,
     PRIMARY KEY(tag_id, "group", version, kind)
 );
+
+CREATE TABLE attempts (
+    id SERIAL PRIMARY KEY,
+    repo VARCHAR(255) NOT NULL,
+    tag VARCHAR(255) NOT NULL,
+    time TIMESTAMP NOT NULL,
+    error VARCHAR(1000) NOT NULL,
+    UNIQUE(repo, tag)
+);
+
+CREATE INDEX idx_attempts_time ON attempts(time);
+
