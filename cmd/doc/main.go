@@ -582,6 +582,19 @@ func listTags(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	if len(tags) == 0 {
+		tryIndex(models.GitterRepo{
+			Org:  org,
+			Repo: repo,
+			Tag:  "", // all tags
+		}, gitterChan)
+		if err := page.HTML(w, http.StatusOK, "new", baseData{Page: pageData}); err != nil {
+			log.Printf("newTemplate.Execute(): %v", err)
+			fmt.Fprint(w, "Unable to render new template.")
+		}
+		return
+	}
+
 	if err := page.HTML(w, http.StatusOK, "list_tags", listTagsData{
 		Page:  pageData,
 		Repo:  strings.Join([]string{org, repo}, "/"),
