@@ -64,8 +64,9 @@ var (
 
 	address string
 
-	gitterChan     chan models.GitterRepo
-	gitterPingTime atomic.Int64
+	gitterChan        chan models.GitterRepo
+	gitterPingTime    atomic.Int64
+	gitterLastHealthy atomic.Bool
 )
 
 // SchemaPlusParent is a JSON schema plus the name of the parent field.
@@ -179,16 +180,25 @@ func gitterPinger(gitterAddr string) {
 	ping := func() {
 		client, err := rpc.DialHTTP("tcp", gitterAddr)
 		if err != nil {
-			log.Print("dialing:", err)
+			if wasHealthy := gitterLastHealthy.Load(); wasHealthy {
+				log.Printf("Gitter became unhealthy: dialing error: %v", err)
+				gitterLastHealthy.Store(false)
+			}
 			return
 		}
 
 		reply := ""
 		if err := client.Call("Gitter.Ping", struct{}{}, &reply); err != nil {
-			log.Printf("Gitter ping error: %v", err)
+			if wasHealthy := gitterLastHealthy.Load(); wasHealthy {
+				log.Printf("Gitter became unhealthy: ping error: %v", err)
+				gitterLastHealthy.Store(false)
+			}
 		} else {
 			gitterPingTime.Store(time.Now().Unix())
-			log.Printf("Gitter ping reply: %s", reply)
+			if wasHealthy := gitterLastHealthy.Load(); !wasHealthy {
+				log.Printf("Gitter became healthy (reply: %s)", reply)
+				gitterLastHealthy.Store(true)
+			}
 		}
 	}
 
