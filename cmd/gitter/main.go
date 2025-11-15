@@ -176,7 +176,7 @@ func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
 func (g *Gitter) doIndex(ctx context.Context, gRepo models.GitterRepo, fullRepo string) error {
 	dir, err := os.MkdirTemp(os.TempDir(), "doc-gitter-*")
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to create working directory for git checkout: %w", err)
 	}
 	defer os.RemoveAll(dir)
 
@@ -254,7 +254,7 @@ func (g *Gitter) doIndex(ctx context.Context, gRepo models.GitterRepo, fullRepo 
 
 	if len(tags) == 0 {
 		log.Printf("No tags found for repo %s/%s@%s\n", gRepo.Org, gRepo.Repo, gRepo.Tag)
-		return fmt.Errorf("repo %s/%s@%s: %w", gRepo.Org, gRepo.Repo, gRepo.Tag, ErrNoTagFound)
+		return ErrNoTagFound
 	}
 
 	log.Printf("Found %d tags for repo %s/%s\n", len(tags), gRepo.Org, gRepo.Repo)
