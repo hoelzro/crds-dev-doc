@@ -321,7 +321,7 @@ func listGVK(w http.ResponseWriter, r *http.Request) {
 	version := parameters["version"]
 	kind := parameters["kind"]
 
-	rows, err := db.Query(r.Context(), "SELECT t.repo, t.name, t.time FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE c.group=$1 AND c.version=$2 AND c.kind=$3 ORDER BY t.time DESC;", group, version, kind)
+	rows, err := db.Query(r.Context(), "SELECT t.repo, t.name, t.time, encode(t.hash_sha1, 'hex'), t.alias_tag_id FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE c.group=$1 AND c.version=$2 AND c.kind=$3 ORDER BY t.time DESC;", group, version, kind)
 	if err != nil {
 		log.Printf("failed to get repos for %s/%s/%s: %v", group, version, kind, err)
 		http.Error(w, "Unable to get repositories for supplied GVK.", http.StatusInternalServerError)
@@ -339,15 +339,19 @@ func listGVK(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var repo, tag string
 		var timestamp time.Time
-		if err := rows.Scan(&repo, &tag, &timestamp); err != nil {
+		var hashSHA1 string
+		var aliasTagID *int
+		if err := rows.Scan(&repo, &tag, &timestamp, &hashSHA1, &aliasTagID); err != nil {
 			log.Printf("failed to scan repo row for %s/%s/%s: %v", group, version, kind, err)
 			fmt.Fprint(w, "Unable to get repositories for supplied GVK.")
 			return
 		}
 
 		data.Repotags[repo] = append(data.Repotags[repo], tagInfo{
-			Name:      tag,
-			Timestamp: timestamp,
+			Name:       tag,
+			Timestamp:  timestamp,
+			HashSHA1:   hashSHA1,
+			AliasTagID: aliasTagID,
 		})
 		data.Total++
 	}
@@ -538,8 +542,10 @@ func raw(w http.ResponseWriter, r *http.Request) {
 }
 
 type tagInfo struct {
-	Name      string
-	Timestamp time.Time
+	Name       string
+	Timestamp  time.Time
+	HashSHA1   string
+	AliasTagID *int
 }
 
 func listTags(w http.ResponseWriter, r *http.Request) {
@@ -549,7 +555,7 @@ func listTags(w http.ResponseWriter, r *http.Request) {
 	pageData := getPageData(r, fmt.Sprintf("%s/%s Tags", org, repo), false)
 	fullRepo := fmt.Sprintf("%s/%s/%s", "github.com", org, repo)
 
-	rows, err := db.Query(r.Context(), "SELECT name, time FROM tags WHERE LOWER(repo)=LOWER($1) ORDER BY time DESC;", fullRepo)
+	rows, err := db.Query(r.Context(), "SELECT name, time, encode(hash_sha1, 'hex'), alias_tag_id FROM tags WHERE LOWER(repo)=LOWER($1) ORDER BY time DESC;", fullRepo)
 	if err != nil {
 		log.Printf("failed to get tags for %s : %v", repo, err)
 		http.Error(w, "Unable to get tags.", http.StatusInternalServerError)
@@ -560,15 +566,19 @@ func listTags(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var t string
 		var ts time.Time
-		if err := rows.Scan(&t, &ts); err != nil {
+		var hashSHA1 string
+		var aliasTagID *int
+		if err := rows.Scan(&t, &ts, &hashSHA1, &aliasTagID); err != nil {
 			log.Printf("listTags(): %v", err)
 			fmt.Fprint(w, "Unable to render tags.")
 			return
 		}
 
 		tags = append(tags, tagInfo{
-			Name:      t,
-			Timestamp: ts,
+			Name:       t,
+			Timestamp:  ts,
+			HashSHA1:   hashSHA1,
+			AliasTagID: aliasTagID,
 		})
 	}
 
@@ -596,7 +606,7 @@ func org(w http.ResponseWriter, r *http.Request) {
 	b := &pgx.Batch{}
 	pageData.Title += fmt.Sprintf("@%s", tag)
 	b.Queue("SELECT t.name, c.group, c.version, c.kind FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE LOWER(t.repo)=LOWER($1) AND t.name=$2;", fullRepo, tag)
-	b.Queue("SELECT name, time FROM tags WHERE LOWER(repo)=LOWER($1) ORDER BY time DESC;", fullRepo)
+	b.Queue("SELECT name, time, encode(hash_sha1, 'hex'), alias_tag_id FROM tags WHERE LOWER(repo)=LOWER($1) ORDER BY time DESC;", fullRepo)
 	br := db.SendBatch(r.Context(), b)
 	defer br.Close()
 	c, err := br.Query()
@@ -638,7 +648,9 @@ func org(w http.ResponseWriter, r *http.Request) {
 	for c.Next() {
 		var t string
 		var ts time.Time
-		if err := c.Scan(&t, &ts); err != nil {
+		var hashSHA1 string
+		var aliasTagID *int
+		if err := c.Scan(&t, &ts, &hashSHA1, &aliasTagID); err != nil {
 			log.Printf("newTemplate.Execute(): %v", err)
 			fmt.Fprint(w, "Unable to render new template.")
 		}
@@ -646,8 +658,10 @@ func org(w http.ResponseWriter, r *http.Request) {
 			tagExists = true
 		}
 		tags = append(tags, tagInfo{
-			Name:      t,
-			Timestamp: ts,
+			Name:       t,
+			Timestamp:  ts,
+			HashSHA1:   hashSHA1,
+			AliasTagID: aliasTagID,
 		})
 	}
 	if len(tags) == 0 || (!tagExists && tag != "") {

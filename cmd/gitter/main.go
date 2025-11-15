@@ -244,19 +244,68 @@ func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
 			log.Printf("Unable to resolve revision: %s (%v)", t.hash.String(), err)
 			continue
 		}
-		r := g.conn.QueryRow(ctx, "SELECT id FROM tags WHERE name=$1 AND repo=$2", t.name, fullRepo)
+
+		// Check if another non-alias tag exists with the same hash
+		r := g.conn.QueryRow(ctx, "SELECT id, name, repo FROM tags WHERE hash_sha1 = decode($1, 'hex') AND alias_tag_id IS NULL LIMIT 1", h.String())
+		var originalTagID *int
+		var originalName, originalRepo string
+		var origID int
+		if err := r.Scan(&origID, &originalName, &originalRepo); err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("error querying tags by hash from database: %w", err)
+			}
+		} else {
+			originalTagID = &origID
+		}
+
+		// Check if (name, repo) already exists
+		r = g.conn.QueryRow(ctx, "SELECT id, encode(hash_sha1, 'hex'), alias_tag_id FROM tags WHERE name=$1 AND repo=$2", t.name, fullRepo)
 		var tagID int
-		if err := r.Scan(&tagID); err != nil {
+		var existingHash string
+		var existingAliasID *int
+		var isAlias bool
+
+		if err := r.Scan(&tagID, &existingHash, &existingAliasID); err != nil {
 			if !errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("error querying tags from database: %w", err)
 			}
 			if !g.dryRun {
-				r := g.conn.QueryRow(ctx, "INSERT INTO tags(name, repo, time) VALUES ($1, $2, $3) RETURNING id", t.name, fullRepo, c.Committer.When)
+				//var aliasTagID interface{}
+				if originalTagID != nil {
+					//aliasTagID = *originalTagID
+					isAlias = true
+					log.Printf("Tag %s@%s is an alias of %s@%s (same hash %s), skipping CRD indexing", t.name, fullRepo, originalName, originalRepo, h.String())
+					//} else {
+					//aliasTagID = nil
+				}
+				r := g.conn.QueryRow(ctx, "INSERT INTO tags(name, repo, time, hash_sha1, alias_tag_id) VALUES ($1, $2, $3, decode($4, 'hex'), $5) RETURNING id", t.name, fullRepo, c.Committer.When, h.String(), originalTagID)
 				if err := r.Scan(&tagID); err != nil {
 					return fmt.Errorf("error inserting tag into database: %w", err)
 				}
+			} else {
+				if originalTagID != nil {
+					isAlias = true
+					log.Printf("[DRYRUN] Tag %s@%s would be an alias of %s@%s (same hash %s), skipping CRD indexing", t.name, fullRepo, originalName, originalRepo, h.String())
+				} else {
+					log.Printf("[DRYRUN] Would insert new tag %s@%s with hash %s", t.name, fullRepo, h.String())
+				}
+			}
+		} else {
+			if existingHash != h.String() {
+				log.Printf("Tag %s@%s already exists with different hash (existing: %s, new: %s), skipping", t.name, fullRepo, existingHash, h.String())
+				continue
+			}
+			if existingAliasID != nil {
+				isAlias = true
+				log.Printf("Tag %s@%s is already an alias (alias_tag_id: %d), skipping CRD indexing", t.name, fullRepo, *existingAliasID)
 			}
 		}
+
+		// Skip CRD processing if this is an alias
+		if isAlias {
+			continue
+		}
+
 		repoCRDs, err := getCRDsFromTag(dir, t.name, h, w)
 		if err != nil {
 			log.Printf("Unable to get CRDs: %s@%s (%v)", repo, t.name, err)
