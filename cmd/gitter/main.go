@@ -29,7 +29,6 @@ import (
 	"path"
 	"regexp"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -61,6 +60,9 @@ const (
 	maxRuntime  = 1 * time.Minute
 	maxTagAge   = 4 * 365 * 24 * time.Hour // 4 years
 
+	minRetryInterval = 24 * time.Hour
+	maxErrorLength   = 950
+
 	dryRunEnv = "GITTER_DRY_RUN"
 )
 
@@ -68,6 +70,7 @@ var (
 	ErrNoTagFound         = errors.New("no tag found")
 	ErrIndexingInProgress = errors.New("indexing already in progress")
 	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
+	ErrRecentFailure      = errors.New("recent failure, retry later")
 )
 
 func main() {
@@ -145,6 +148,32 @@ func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), maxRuntime)
 	defer cancel()
 
+	fullRepo := gRepo.FullName()
+
+	// Check for recent failures
+	var recentFailureTime time.Time
+	checkErr := g.conn.QueryRow(ctx, "SELECT time FROM attempts WHERE repo = $1 AND tag = $2 AND time > NOW() - $3 LIMIT 1", fullRepo, gRepo.Tag, minRetryInterval).Scan(&recentFailureTime)
+	if checkErr == nil {
+		return fmt.Errorf("%w: last failed at %s", ErrRecentFailure, recentFailureTime.Format(time.RFC3339))
+	} else if !errors.Is(checkErr, pgx.ErrNoRows) {
+		return fmt.Errorf("error querying recent failures: %w", checkErr)
+	}
+
+	if err := g.doIndex(ctx, gRepo, fullRepo); err != nil {
+		if !g.dryRun {
+			truncStr := truncateError(err.Error())
+			if _, dbErr := g.conn.Exec(context.Background(), "INSERT INTO attempts(repo, tag, time, error) VALUES ($1, $2, NOW(), $3) ON CONFLICT (repo, tag) DO UPDATE SET time = EXCLUDED.time, error = EXCLUDED.error", fullRepo, gRepo.Tag, truncStr); dbErr != nil {
+				log.Printf("Failed to record indexing attempt: %v", dbErr)
+			}
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+func (g *Gitter) doIndex(ctx context.Context, gRepo models.GitterRepo, fullRepo string) error {
 	dir, err := os.MkdirTemp(os.TempDir(), "doc-gitter-*")
 	if err != nil {
 		return err
@@ -158,7 +187,6 @@ func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
 	}
 	defer log.Printf("Finished indexing %s/%s\n", gRepo.Org, gRepo.Repo)
 
-	fullRepo := fmt.Sprintf("%s/%s/%s", "github.com", strings.ToLower(gRepo.Org), strings.ToLower(gRepo.Repo))
 	cloneOpts := &git.CloneOptions{
 		URL:               fmt.Sprintf("https://%s", fullRepo),
 		Depth:             1,
@@ -182,6 +210,7 @@ func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
 	if err != nil {
 		return fmt.Errorf("git worktree error: %w", err)
 	}
+
 	// Get CRDs for each tag
 	tags := []tag{}
 	if err := iter.ForEach(func(obj *plumbing.Reference) error {
@@ -220,7 +249,7 @@ func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
 		}
 		return nil
 	}); err != nil {
-		log.Println("Error iterating tags:", err)
+		log.Println("Transient error iterating tags:", err)
 	}
 
 	if len(tags) == 0 {
@@ -270,13 +299,9 @@ func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
 				return fmt.Errorf("error querying tags from database: %w", err)
 			}
 			if !g.dryRun {
-				//var aliasTagID interface{}
 				if originalTagID != nil {
-					//aliasTagID = *originalTagID
 					isAlias = true
 					log.Printf("Tag %s@%s is an alias of %s@%s (same hash %s), skipping CRD indexing", t.name, fullRepo, originalName, originalRepo, h.String())
-					//} else {
-					//aliasTagID = nil
 				}
 				r := g.conn.QueryRow(ctx, "INSERT INTO tags(name, repo, time, hash_sha1, alias_tag_id) VALUES ($1, $2, $3, decode($4, 'hex'), $5) RETURNING id", t.name, fullRepo, c.Committer.When, h.String(), originalTagID)
 				if err := r.Scan(&tagID); err != nil {
@@ -328,6 +353,14 @@ func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
 	}
 
 	return nil
+}
+
+func truncateError(errMsg string) string {
+	if len(errMsg) <= maxErrorLength {
+		return errMsg
+	}
+	suffix := fmt.Sprintf(" [truncated at %d bytes]", maxErrorLength)
+	return errMsg[:maxErrorLength] + suffix
 }
 
 var (
