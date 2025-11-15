@@ -504,9 +504,9 @@ func raw(w http.ResponseWriter, r *http.Request) {
 	var rows pgx.Rows
 	var err error
 	if tag == "" {
-		rows, err = db.Query(r.Context(), "SELECT c.data::jsonb FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE LOWER(t.repo)=LOWER($1) AND t.id = (SELECT id FROM tags WHERE LOWER(repo) = LOWER($1) ORDER BY time DESC LIMIT 1);", fullRepo)
+		rows, err = db.Query(r.Context(), "SELECT c.data::jsonb FROM tags t INNER JOIN crds c ON (c.tag_id = COALESCE(t.alias_tag_id, t.id)) WHERE LOWER(t.repo)=LOWER($1) AND t.id = (SELECT id FROM tags WHERE LOWER(repo) = LOWER($1) ORDER BY time DESC LIMIT 1);", fullRepo)
 	} else {
-		rows, err = db.Query(r.Context(), "SELECT c.data::jsonb FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE LOWER(t.repo)=LOWER($1) AND t.name=$2;", fullRepo, tag)
+		rows, err = db.Query(r.Context(), "SELECT c.data::jsonb FROM tags t INNER JOIN crds c ON (c.tag_id = COALESCE(t.alias_tag_id, t.id)) WHERE LOWER(t.repo)=LOWER($1) AND t.name=$2;", fullRepo, tag)
 	}
 
 	var res []byte
@@ -618,7 +618,7 @@ func org(w http.ResponseWriter, r *http.Request) {
 
 	b := &pgx.Batch{}
 	pageData.Title += fmt.Sprintf("@%s", tag)
-	b.Queue("SELECT t.name, c.group, c.version, c.kind FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE LOWER(t.repo)=LOWER($1) AND t.name=$2;", fullRepo, tag)
+	b.Queue("SELECT t.name, c.group, c.version, c.kind FROM tags t INNER JOIN crds c ON (c.tag_id = COALESCE(t.alias_tag_id, t.id)) WHERE LOWER(t.repo)=LOWER($1) AND t.name=$2;", fullRepo, tag)
 	b.Queue("SELECT name, time, encode(hash_sha1, 'hex'), alias_tag_id FROM tags WHERE LOWER(repo)=LOWER($1) ORDER BY time DESC;", fullRepo)
 	br := db.SendBatch(r.Context(), b)
 	defer br.Close()
@@ -730,9 +730,9 @@ func doc(w http.ResponseWriter, r *http.Request) {
 	fullRepo := fmt.Sprintf("%s/%s/%s", "github.com", org, repo)
 	var c pgx.Row
 	if tag == "" {
-		c = db.QueryRow(r.Context(), "SELECT t.name, c.data::jsonb FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE LOWER(t.repo)=LOWER($1) AND t.id = (SELECT id FROM tags WHERE repo = $1 ORDER BY time DESC LIMIT 1) AND c.group=$2 AND c.version=$3 AND c.kind=$4;", fullRepo, group, version, kind)
+		c = db.QueryRow(r.Context(), "SELECT t.name, c.data::jsonb FROM tags t INNER JOIN crds c ON (c.tag_id = COALESCE(t.alias_tag_id, t.id)) WHERE LOWER(t.repo)=LOWER($1) AND t.id = (SELECT id FROM tags WHERE repo = $1 ORDER BY time DESC LIMIT 1) AND c.group=$2 AND c.version=$3 AND c.kind=$4;", fullRepo, group, version, kind)
 	} else {
-		c = db.QueryRow(r.Context(), "SELECT t.name, c.data::jsonb FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE LOWER(t.repo)=LOWER($1) AND t.name=$2 AND c.group=$3 AND c.version=$4 AND c.kind=$5;", fullRepo, tag, group, version, kind)
+		c = db.QueryRow(r.Context(), "SELECT t.name, c.data::jsonb FROM tags t INNER JOIN crds c ON (c.tag_id = COALESCE(t.alias_tag_id, t.id)) WHERE LOWER(t.repo)=LOWER($1) AND t.name=$2 AND c.group=$3 AND c.version=$4 AND c.kind=$5;", fullRepo, tag, group, version, kind)
 	}
 	foundTag := tag
 	if err := c.Scan(&foundTag, crd); err != nil {
