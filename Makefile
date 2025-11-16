@@ -7,4 +7,13 @@ build-doc:
 build-gitter:
 	docker build . -f deploy/gitter.Dockerfile -t crdsdev/doc-gitter:latest
 
+run-doc:
+	go run -v ./cmd/doc
+
+run-gitter:
+	go run -v ./cmd/gitter
+
+test:
+	go test ./...
+
 .PHONY: build-doc build-gitter
