@@ -1,5 +1,14 @@
 <div class="content-wrapper">
     <div class="container">
-        <h2>Oops! Looks like we haven't indexed this version of this repo yet. We are working on that now...</h2>
+        {{ if .IndexingReply }}
+        <h2>Indexing</h2>
+        <p><strong>Status:</strong> {{ .IndexingReply }}</p>
+        {{ else if .Page.IndexerAlive }}
+        <h2>Not Indexed Yet</h2>
+        <p>Looks like we haven't indexed this version of this repo yet. Reload this page in a few minutes.</p>
+        {{ else }}
+        <h2>Oops!</h2>
+        <p>Our indexing service is unavailable. Please try again later.</p>
+        {{ end }}
     </div>
 </div>

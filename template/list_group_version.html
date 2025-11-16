@@ -1,34 +1,11 @@
 <div class="content-wrapper">
     <div class="container">
-        <p>
-            {{ if .Tag }}
-                Source: <a href="https://github.com/{{ .Repo }}/tree/{{ .Tag }}"><span class="label label-primary">github.com/{{ .Repo }}/tree/{{ .Tag }}</span></a>
-                <br>Tag created at {{ .At }}
-            {{ else }}
-                Source: <a href="https://github.com/{{ .Repo }}"><span class="label label-primary">github.com/{{ .Repo }}</span></a>
-            {{ end }}
-        </p>
-        <select class="form-control w-md-400 w-sm-full mb-md-10 mb-5" onchange="handleSelect(this)">
-            {{ $actual := .Tag }}{{ $repo := .Repo }}{{ range $tag := .Tags }}
-                {{ if eq $tag.Name $actual }}
-                <option value="/repo/github.com/{{ $repo }}@{{ $tag.Name }}" selected="selected">{{ $tag.Name }} ({{ $tag.Timestamp }})</option>
-                {{ else }}
-                <option value="/repo/github.com/{{ $repo }}@{{ $tag.Name }}" >{{ $tag.Name }} ({{ $tag.Timestamp }})</option>
-                {{ end }}
-            {{ end }}
-        </select>
-        <p>CRDs discovered: <b>{{ .Total }}</b></p>
-        <div id="crds"></div>
+        <p>Found <b>{{ .Total }} kinds</b> in {{ .Group }}/{{ .Version }}</p>
+        <div id="kinds"></div>
     </div>
 </div>
 
 {{ template "_scripts" . }}
-<script type="text/javascript">
-    function handleSelect(elm)
-    {
-       window.location = elm.value;
-    }
-  </script>
 <script src="https://unpkg.com/react-table@7/dist/react-table.production.min.js"></script>
 <script type="module">
     import { formatRelative } from 'https://cdn.jsdelivr.net/npm/date-fns/+esm';
@@ -37,24 +14,20 @@
     const { html } = htmReact;
     const { useTable, useSortBy, useGlobalFilter  } = ReactTable;
 
-    const { Repo, CRDs, Tag, } = {{ . }};
-    const data = Object.keys(CRDs).map(key => CRDs[key]);
+    const { Group, Version, Kinds, } = {{ . }};
+    const data = Object.keys(Kinds).map(key => {
+        return { Kind: key, Count: Kinds[key] };
+    });
 
     const columns = [
         {
             Header: 'Kind',
             accessor: 'Kind',
-            Cell: ({ row: { original }, value }) => html`<a href=${`/repo/github.com/${Repo}/${original.Group}/${original.Kind}/${original.Version}@${Tag}`}>${value}</a>`
+            Cell: ({ row: { original }, value }) => html`<a href=${`/gvk/${Group}/${Version}/${original.Kind}`}>${value}</a>`,
         },
         {
-            Header: 'Group',
-            accessor: 'Group',
-            Cell: ({ row: { original }, value }) => html`<a href=${`/gvk/${original.Group}`}>${value}</a>`
-        },
-        {
-            Header: 'Version',
-            accessor: 'Version',
-            Cell: ({ row: { original }, value }) => html`<a href=${`/gvk/${original.Group}/${original.Version}`}>${value}</a>`
+            Header: 'Number of Repotags Available in',
+            accessor: 'Count'
         }
     ];
 
@@ -63,17 +36,17 @@
         ${column.render('Header')}
             <span class="sort-header ${column.isSorted ? 'sort-header-active' : ''}">
             ${(column.isSorted
-                ? column.isSortedDesc
-                    ? html`<i class="fas fa-sort-down"></i>`
-                    : html`<i class="fas fa-sort-up"></i>`
-                : html`<i class="fas fa-sort"></i>`)}
+            ? column.isSortedDesc
+                ? html`<i class="fas fa-sort-down"></i>`
+                : html`<i class="fas fa-sort-up"></i>`
+            : html`<i class="fas fa-sort"></i>`)}
             </span>
         </th>`
     }
 
-    function CRDTable() {
+    function KindsTable() {
         const table = useTable({ columns, data }, useSortBy, useGlobalFilter);
-         const {
+        const {
             getTableProps,
             getTableBodyProps,
             headerGroups,
@@ -98,28 +71,28 @@
                 </thead>
                 <tbody ...${getTableBodyProps()}>
                     ${rows.map(row => {
-                        prepareRow(row)
-                        return html`
+            prepareRow(row)
+            return html`
                         <tr ...${row.getRowProps()}>
                             ${row.cells.map(cell => html`
                             <td ...${cell.getCellProps()}>${cell.render('Cell')}</td>
                             `)}
                         </tr>
                         `
-                    })}
+        })}
                 </tbody>
             </table>
         </div>`;
     }
 
-    render(html`<${CRDTable} />`, document.getElementById("crds"));
+    render(html`<${KindsTable} />`, document.getElementById("kinds"));
 </script>
 <style>
-    #crds .sort-header {
+    #kinds .sort-header {
         margin-left: 1rem;
     }
 
-    #crds .sort-header:not(.sort-header-active) {
+    #kinds .sort-header:not(.sort-header-active) {
         opacity: 0.5;
     }
 </style>

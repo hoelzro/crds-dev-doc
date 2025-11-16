@@ -17,18 +17,20 @@ limitations under the License.
 package crd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/validation"
 	servervalidation "k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
-	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/validation"
 	"sigs.k8s.io/yaml"
 )
 
@@ -49,10 +51,25 @@ type CRDer struct {
 
 // NewCRDer returns a new CRDer type.
 func NewCRDer(data []byte, m ...Modifier) (*CRDer, error) {
+	meta := metav1.TypeMeta{}
+	if err := yaml.Unmarshal(data, &meta); err != nil {
+		return nil, fmt.Errorf("could not unmarshal crd type metadata: %w", err)
+	}
+
 	internal := &apiextensions.CustomResourceDefinition{}
-	if errV1Beta1 := convertV1Beta1ToInternal(data, internal, m...); errV1Beta1 != nil {
+	if meta.APIVersion == apiextensionsv1.SchemeGroupVersion.String() {
+		if err := convertV1ToInternal(data, internal, m...); err != nil {
+			return nil, fmt.Errorf("v1 conversion unsuccessful: %w", err)
+		}
+	} else if meta.APIVersion == v1beta1.SchemeGroupVersion.String() {
+		if err := convertV1Beta1ToInternal(data, internal, m...); err != nil {
+			return nil, fmt.Errorf("v1beta1 conversion unsuccessful: %w", err)
+		}
+	} else {
 		if errV1 := convertV1ToInternal(data, internal, m...); errV1 != nil {
-			return nil, fmt.Errorf("conversion unsuccessful: %s, %s", errV1Beta1, errV1)
+			if errV1Beta1 := convertV1Beta1ToInternal(data, internal, m...); errV1Beta1 != nil {
+				return nil, fmt.Errorf("fallback conversion unsuccessful: v1beta1ToInternal:%w, v1ToInternal:%w", errV1Beta1, errV1)
+			}
 		}
 	}
 
@@ -68,7 +85,7 @@ func NewCRDer(data []byte, m ...Modifier) (*CRDer, error) {
 func (c *CRDer) Validate(data []byte) error {
 	sv := getStoredSchema(c.CRD.Spec)
 
-	s, _, err := servervalidation.NewSchemaValidator(sv)
+	s, _, err := servervalidation.NewSchemaValidator(sv.OpenAPIV3Schema)
 	if err != nil {
 		return errors.New(createSchemaValidatorErr)
 	}
@@ -100,40 +117,39 @@ func (c *CRDer) Validate(data []byte) error {
 }
 
 func convertV1ToInternal(data []byte, internal *apiextensions.CustomResourceDefinition, mods ...Modifier) error {
-	crd := &v1.CustomResourceDefinition{}
+	crd := &apiextensionsv1.CustomResourceDefinition{}
 	if err := yaml.Unmarshal(data, crd); err != nil {
-		return err
+		return fmt.Errorf("v1 unmarshal error: %w", err)
 	}
-	v1.SetDefaults_CustomResourceDefinition(crd)
-	if err := v1.Convert_v1_CustomResourceDefinition_To_apiextensions_CustomResourceDefinition(crd, internal, nil); err != nil {
-		return err
+
+	apiextensionsv1.SetDefaults_CustomResourceDefinition(crd)
+	if err := apiextensionsv1.Convert_v1_CustomResourceDefinition_To_apiextensions_CustomResourceDefinition(crd, internal, nil); err != nil {
+		return fmt.Errorf("v1 conversion error: %w", err)
 	}
+
 	for _, m := range mods {
 		m(internal)
 	}
-	errList := validation.ValidateCustomResourceDefinition(internal, v1.SchemeGroupVersion)
-	if len(errList) > 0 {
-		return errors.New(errList.ToAggregate().Error())
-	}
 
+	if err := validation.ValidateCustomResourceDefinition(context.Background(), internal).ToAggregate(); err != nil {
+		return fmt.Errorf("v1 validation error: %w", err)
+	}
 	return nil
 }
 
 func convertV1Beta1ToInternal(data []byte, internal *apiextensions.CustomResourceDefinition, mods ...Modifier) error {
 	crd := &v1beta1.CustomResourceDefinition{}
 	if err := yaml.Unmarshal(data, crd); err != nil {
-		return err
+		return fmt.Errorf("v1beta1 unmarshal error: %w", err)
 	}
+
 	v1beta1.SetObjectDefaults_CustomResourceDefinition(crd)
 	if err := v1beta1.Convert_v1beta1_CustomResourceDefinition_To_apiextensions_CustomResourceDefinition(crd, internal, nil); err != nil {
-		return err
+		return fmt.Errorf("v1beta1 conversion error: %w", err)
 	}
+
 	for _, m := range mods {
 		m(internal)
-	}
-	errList := validation.ValidateCustomResourceDefinition(internal, v1beta1.SchemeGroupVersion)
-	if len(errList) > 0 {
-		return errors.New(errList.ToAggregate().Error())
 	}
 
 	return nil
@@ -184,10 +200,18 @@ func StripLabels() Modifier {
 	}
 }
 
-// StripAnnotations removes annotations from a CRD's metadata
+// StripAnnotations removes annotations from a CRD's metadata, except for
+// the special api-approved annotation necessary in v1
 func StripAnnotations() Modifier {
 	return func(crd *apiextensions.CustomResourceDefinition) {
-		crd.SetAnnotations(map[string]string{})
+		oldAnnotations := crd.GetAnnotations()
+
+		newAnnotations := map[string]string{}
+		if v, ok := oldAnnotations[apiextensionsv1.KubeAPIApprovedAnnotation]; ok {
+			newAnnotations[apiextensionsv1.KubeAPIApprovedAnnotation] = v
+		}
+
+		crd.SetAnnotations(newAnnotations)
 	}
 }
 

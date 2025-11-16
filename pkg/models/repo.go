@@ -16,6 +16,11 @@ limitations under the License.
 
 package models
 
+import (
+	"fmt"
+	"strings"
+)
+
 // RepoCRD is a CRD and data about its location in a repository.
 type RepoCRD struct {
 	Path     string
@@ -31,4 +36,8 @@ type GitterRepo struct {
 	Org  string
 	Repo string
 	Tag  string
+}
+
+func (g GitterRepo) FullName() string {
+	return fmt.Sprintf("github.com/%s/%s", strings.ToLower(g.Org), strings.ToLower(g.Repo))
 }

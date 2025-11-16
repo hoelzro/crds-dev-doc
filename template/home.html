@@ -1,15 +1,52 @@
 <div class="position-fixed top-0 right-0 z-10">
+    <button class="btn m-10 mr-15" type="button" onclick="window.location = 'https://github.com/ripta/crds-dev-doc'"><i class="fa-brands fa-github"></i></button>
     <button class="btn btn-primary m-10 mr-15" type="button" onclick="halfmoon.toggleDarkMode()"><i class="fas fa-moon" aria-hidden="true"></i><span class="sr-only">Toggle Dark Mode</span></button>
 </div>
 
 <div class="content-wrapper home-page">
     <div class="container mt-md-20">
         <div class="content hero">
-            <h1 class="text-center site-title">doc.crds.dev</h1>
+            <h1 class="text-center site-title">
+                crds.r8y.page
+            </h1>
             <div id="repo_go"></div>
-            <p class="text-center">doc.crds.dev is and always will be <a href="https://github.com/crdsdev/doc">free and open source</a>.</p>
+            <p class="text-center">
+                The code for crds.r8y.page can be found on GitHub at <a href="https://github.com/ripta/crds-dev-doc">ripta/crds-dev-doc</a>;<br>
+                it was forked from <a href="https://github.com/crdsdev/doc">crdsdev/doc</a>, which hadn't been updated in a while.
+            </p>
+            <p>
+                Only public repos on github.com are currently supported. Repositories must contain the CRD manifests in
+                YAML format (e.g., not JSON, not a helm chart template), have the kind <code>CustomResourceDefinition</code>,
+                be named ending with <code>.yaml</code>, and be able to pass the
+                <a href="https://pkg.go.dev/k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/validation">Kubernetes CRD validator</a>.
+            </p>
+            <p>
+                To find a repo, search for <kbd>github.com/{org}/{repo}</kbd>. This takes you to the latest version indexed.<br>
+                <strong>e.g., </strong> <a href="/repo/github.com/crossplane/crossplane">github.com/crossplane/crossplane</a>
+            </p>
+            <p>
+                To find a repo at a specific tag, search for <kbd>github.com/{org}/{repo}@{version}</kbd>.<br>
+                <strong>e.g., </strong> <a href="/repo/github.com/crossplane/crossplane@v2.0.0">github.com/crossplane/crossplane@v2.0.0</a>
+                or <a href="/repo/github.com/prometheus-operator/prometheus-operator@pkg/apis/monitoring/v0.65.2">github.com/prometheus-operator/prometheus-operator@pkg/apis/monitoring/v0.65.2</a>
+            </p>
+            <p>
+                To find a CRD by its GVK, search for <kbd>{group}/{version}/{kind}</kbd>.
+                This takes you to a list of all repos and versions that contain that GVK.<br>
+                <strong>e.g., </strong> <a href="/gvk/monitoring.coreos.com/v1/Prometheus">monitoring.coreos.com/v1/Prometheus</a>
+            </p>
+            <p>
+                To list all kinds within a group-version, search for <kbd>{group}/{version}</kbd>.<br>
+                <strong>e.g., </strong> <a href="/gvk/monitoring.coreos.com/v1">monitoring.coreos.com/v1</a>
+            </p>
+            <p>
+                To list all versions within a group, search for <kbd>{group}</kbd>.<br>
+                <strong>e.g., </strong> <a href="/gvk/monitoring.coreos.com">monitoring.coreos.com</a>
+            </p>
+            <p>
+                You can also explore <a href="/recent">the most recently indexed repositories</a>,
+                or <a href="/gvk">an index of all indexed CRDs by group</a>.
+            </p>
         </div>
-        <p>To find a repo, search <kbd>github.com/{org}/{repo}</kbd>. You may optionally append <kbd>@{version}</kbd> to view documentation for a specific version of the project. For example: <a href="/github.com/crossplane/crossplane@v0.10.0">github.com/crossplane/crossplane@v0.10.0</a>. If you do not include a tag, the latest indexed tag will be served.</p>
     </div>
 </div>
 
@@ -28,7 +65,11 @@
                 .replace(/https?:\/\//, "")
                 .split("/");
             urlParts[0] = urlParts[0].toLowerCase();
-            window.location.assign(`/${urlParts.join("/")}`);
+            if (urlParts[0] === "github.com") {
+                window.location.assign(`/repo/${urlParts.join("/")}`);
+            } else {
+                window.location.assign(`/gvk/${urlParts.join("/")}`);
+            }
             e.preventDefault();
         };
 
