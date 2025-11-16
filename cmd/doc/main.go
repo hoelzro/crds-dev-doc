@@ -847,7 +847,7 @@ func doc(w http.ResponseWriter, r *http.Request) {
 	org, repo, group, kind, version, tag, err := parseGHURL(strings.TrimPrefix(r.URL.Path, "/repo"))
 	if err != nil {
 		log.Printf("failed to parse Github path %q: %v", r.URL.Path, err)
-		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		http.Error(w, "Repository not found.", http.StatusNotFound)
 		return
 	}
 
@@ -869,10 +869,16 @@ func doc(w http.ResponseWriter, r *http.Request) {
 	}
 	foundTag := tag
 	if err := c.Scan(&foundTag, crd); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "CRD not found.", http.StatusNotFound)
+			return
+		}
+
 		log.Printf("failed to get CRDs for %s (%s): %v", repo, fullRepo, err)
 		if err := page.HTML(w, http.StatusOK, "doc", baseData{Page: pageData}); err != nil {
 			log.Printf("newTemplate.Execute(): %v", err)
 			fmt.Fprint(w, "Unable to render new template.")
+			return
 		}
 	}
 	schema = crd.Spec.Validation
