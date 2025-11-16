@@ -17,5 +17,9 @@ RUN go install -v ./cmd/...
 # Deployment image
 FROM gcr.io/distroless/static:nonroot
 
+WORKDIR /app
+
 COPY --from=build /go/bin/doc /usr/local/bin/doc
 COPY --from=build /go/bin/gitter /usr/local/bin/gitter
+COPY ./template ./template
+COPY ./static ./static
