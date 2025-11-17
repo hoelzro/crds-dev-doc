@@ -516,7 +516,7 @@ func splitYAML(file []byte, filename string) ([][]byte, error) {
 				break
 			}
 
-			log.Printf("error #%d: failed to decode part of CRD file: %s\n%s", errCount, filename, err)
+			log.Printf("error #%d: failed to decode part of CRD file %s: %s", errCount, filename, err)
 			errCount++
 			continue
 		}
