@@ -353,6 +353,7 @@ func start() {
 
 	logger.Info("starting doc server", "addr", listenAddr)
 	r := mux.NewRouter().StrictSlash(true)
+	r.Use(loggingMiddleware)
 	staticHandler := http.StripPrefix("/static/", http.FileServer(http.Dir("./static/")))
 	r.HandleFunc("/", home)
 	r.PathPrefix("/static/").Handler(staticHandler)
@@ -869,7 +870,6 @@ func org(w http.ResponseWriter, r *http.Request) {
 func doc(w http.ResponseWriter, r *http.Request) {
 	var schema *apiextensions.CustomResourceValidation
 	crd := &apiextensions.CustomResourceDefinition{}
-	logger.Debug("request received", "path", r.URL.Path)
 	org, repo, group, kind, version, tag, err := parseGHURL(strings.TrimPrefix(r.URL.Path, "/repo"))
 	if err != nil {
 		logger.Warn("failed to parse Github path", "path", r.URL.Path, "err", err)
