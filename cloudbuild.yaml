@@ -17,7 +17,3 @@ steps:
       - '-f'
       - 'Dockerfile'
       - '.'
-
-  - id: Push
-    name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/crds-dev-doc:commit-$SHORT_SHA']
