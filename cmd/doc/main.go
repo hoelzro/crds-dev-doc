@@ -38,7 +38,7 @@ import (
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/unrolled/render"
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
-	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"sigs.k8s.io/yaml"
 )
 
@@ -597,11 +597,11 @@ func raw(w http.ResponseWriter, r *http.Request) {
 		if err := yaml.Unmarshal(res, crd); err != nil {
 			break
 		}
-		crdv1 := &v1.CustomResourceDefinition{}
-		if err := v1.Convert_apiextensions_CustomResourceDefinition_To_v1_CustomResourceDefinition(crd, crdv1, nil); err != nil {
+		crdv1 := &apiextensionsv1.CustomResourceDefinition{}
+		if err := apiextensionsv1.Convert_apiextensions_CustomResourceDefinition_To_v1_CustomResourceDefinition(crd, crdv1, nil); err != nil {
 			break
 		}
-		crdv1.SetGroupVersionKind(v1.SchemeGroupVersion.WithKind("CustomResourceDefinition"))
+		crdv1.SetGroupVersionKind(apiextensionsv1.SchemeGroupVersion.WithKind("CustomResourceDefinition"))
 		y, err := yaml.Marshal(crdv1)
 		if err != nil {
 			break
