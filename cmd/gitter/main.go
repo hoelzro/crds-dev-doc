@@ -21,7 +21,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/rpc"
@@ -29,6 +29,7 @@ import (
 	"path"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -73,7 +74,30 @@ var (
 	ErrRecentFailure      = errors.New("recent failure, retry later")
 )
 
+var logger *slog.Logger
+
+func parseLogLevel() slog.Level {
+	level := strings.ToLower(os.Getenv("LOG_LEVEL"))
+	switch level {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
 func main() {
+	logLevel := parseLogLevel()
+	logger = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+		Level: logLevel,
+	}))
+
 	dsn := os.Getenv("CRDS_DEV_STORAGE_DSN")
 	if dsn == "" {
 		dsn = fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", os.Getenv(userEnv), os.Getenv(passwordEnv), os.Getenv(hostEnv), os.Getenv(portEnv), os.Getenv(dbEnv))
@@ -81,11 +105,13 @@ func main() {
 
 	conn, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		panic(err)
+		logger.Error("failed to parse database config", "err", err)
+		os.Exit(1)
 	}
 	pool, err := pgxpool.ConnectConfig(context.Background(), conn)
 	if err != nil {
-		panic(err)
+		logger.Error("failed to connect to database", "err", err)
+		os.Exit(1)
 	}
 	gitter := &Gitter{
 		conn:    pool,
@@ -103,11 +129,11 @@ func main() {
 
 	l, e := net.Listen("tcp", listenAddr)
 	if e != nil {
-		log.Fatal("listen error:", e)
+		logger.Error("failed to listen", "addr", listenAddr, "err", e)
+		os.Exit(1)
 	}
 
-	log.Println("Starting gitter on", listenAddr)
-	log.Println("Limiter set to", gitter.limiter.Limit())
+	logger.Info("starting gitter", "addr", listenAddr, "rate_limit", gitter.limiter.Limit())
 	http.Serve(l, nil)
 }
 
@@ -175,13 +201,13 @@ func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
 
 	if rsv := g.limiter.Reserve(); !rsv.OK() {
 		g.locks.Delete(key)
-		log.Printf("Burst limit exceeded, cannot index %s at this time", key)
+		logger.Warn("burst limit exceeded", "repo", fullRepo, "tag", gRepo.Tag)
 		*reply = "no indexing capacity: burst exceeded"
 		return nil
 	} else if delay := rsv.Delay(); delay > 0 {
 		rsv.Cancel()
 		g.locks.Delete(key)
-		log.Printf("Rate limit exceeded, need to wait %s before indexing %s", delay.String(), key)
+		logger.Warn("rate limit exceeded", "repo", fullRepo, "tag", gRepo.Tag, "delay", delay.String())
 		*reply = "low indexing capacity: try again in a few minutes"
 		return nil
 	}
@@ -197,12 +223,12 @@ func (g *Gitter) Index(gRepo models.GitterRepo, reply *string) error {
 			if !g.dryRun {
 				truncStr := truncateError(err.Error())
 				if _, dbErr := g.conn.Exec(context.Background(), "INSERT INTO attempts(repo, tag, time, error) VALUES ($1, $2, NOW(), $3) ON CONFLICT (repo, tag) DO UPDATE SET time = EXCLUDED.time, error = EXCLUDED.error", fullRepo, gRepo.Tag, truncStr); dbErr != nil {
-					log.Printf("Failed to record indexing attempt: %v", dbErr)
+					logger.Error("failed to record indexing attempt", "repo", fullRepo, "tag", gRepo.Tag, "err", dbErr)
 				}
 			}
-			log.Printf("Indexing failed for %s: %v", key, err)
+			logger.Error("indexing failed", "repo", fullRepo, "tag", gRepo.Tag, "err", err)
 		} else {
-			log.Printf("Successfully completed indexing for %s", key)
+			logger.Info("indexing completed", "repo", fullRepo, "tag", gRepo.Tag)
 		}
 	}()
 
@@ -218,11 +244,11 @@ func (g *Gitter) doIndex(ctx context.Context, gRepo models.GitterRepo, fullRepo 
 	defer os.RemoveAll(dir)
 
 	if g.dryRun {
-		log.Printf("[DRYRUN] Indexing repo %s/%s@%s into %s\n", gRepo.Org, gRepo.Repo, gRepo.Tag, dir)
+		logger.Info("indexing repo", "org", gRepo.Org, "repo", gRepo.Repo, "tag", gRepo.Tag, "dir", dir, "dry_run", true)
 	} else {
-		log.Printf("Indexing repo %s/%s@%s into %s\n", gRepo.Org, gRepo.Repo, gRepo.Tag, dir)
+		logger.Info("indexing repo", "org", gRepo.Org, "repo", gRepo.Repo, "tag", gRepo.Tag, "dir", dir)
 	}
-	defer log.Printf("Finished indexing %s/%s\n", gRepo.Org, gRepo.Repo)
+	defer logger.Info("finished indexing", "org", gRepo.Org, "repo", gRepo.Repo)
 
 	cloneOpts := &git.CloneOptions{
 		URL:               fmt.Sprintf("https://%s", fullRepo),
@@ -254,17 +280,17 @@ func (g *Gitter) doIndex(ctx context.Context, gRepo models.GitterRepo, fullRepo 
 		// Resolve the commit to get the timestamp
 		h, err := repo.ResolveRevision(plumbing.Revision(obj.Hash().String()))
 		if err != nil || h == nil {
-			log.Printf("Unable to resolve revision for tag %s: %s (%v)", obj.Name().Short(), obj.Hash().String(), err)
+			logger.Warn("unable to resolve revision for tag", "tag", obj.Name().Short(), "hash", obj.Hash().String(), "err", err)
 			return nil
 		}
 		c, err := repo.CommitObject(*h)
 		if err != nil || c == nil {
-			log.Printf("Unable to get commit object for tag %s: %s (%v)", obj.Name().Short(), obj.Hash().String(), err)
+			logger.Warn("unable to get commit object for tag", "tag", obj.Name().Short(), "hash", obj.Hash().String(), "err", err)
 			return nil
 		}
 
 		if c.Committer.When.Before(time.Now().Add(-1 * maxTagAge)) {
-			log.Printf("Skipping tag %s: too old (%s)", obj.Name().Short(), c.Committer.When)
+			logger.Warn("skipping tag: too old", "tag", obj.Name().Short(), "commit_time", c.Committer.When)
 			return nil
 		}
 
@@ -286,15 +312,15 @@ func (g *Gitter) doIndex(ctx context.Context, gRepo models.GitterRepo, fullRepo 
 		}
 		return nil
 	}); err != nil {
-		log.Println("Transient error iterating tags:", err)
+		logger.Warn("transient error iterating tags", "err", err)
 	}
 
 	if len(tags) == 0 {
-		log.Printf("No tags found for repo %s/%s@%s\n", gRepo.Org, gRepo.Repo, gRepo.Tag)
+		logger.Warn("no tags found for repo", "org", gRepo.Org, "repo", gRepo.Repo, "tag", gRepo.Tag)
 		return ErrNoTagFound
 	}
 
-	log.Printf("Found %d tags for repo %s/%s\n", len(tags), gRepo.Org, gRepo.Repo)
+	logger.Info("found tags for repo", "org", gRepo.Org, "repo", gRepo.Repo, "count", len(tags))
 	sort.Slice(tags, func(i, j int) bool {
 		return tags[i].timestamp.After(tags[j].timestamp)
 	})
@@ -302,12 +328,12 @@ func (g *Gitter) doIndex(ctx context.Context, gRepo models.GitterRepo, fullRepo 
 	for _, t := range tags {
 		h, err := repo.ResolveRevision(plumbing.Revision(t.hash.String()))
 		if err != nil || h == nil {
-			log.Printf("Unable to resolve revision: %s (%v)", t.hash.String(), err)
+			logger.Warn("unable to resolve revision", "hash", t.hash.String(), "err", err)
 			continue
 		}
 		c, err := repo.CommitObject(*h)
 		if err != nil || c == nil {
-			log.Printf("Unable to resolve revision: %s (%v)", t.hash.String(), err)
+			logger.Warn("unable to resolve revision", "hash", t.hash.String(), "err", err)
 			continue
 		}
 
@@ -338,7 +364,7 @@ func (g *Gitter) doIndex(ctx context.Context, gRepo models.GitterRepo, fullRepo 
 			if !g.dryRun {
 				if originalTagID != nil {
 					isAlias = true
-					log.Printf("Tag %s@%s is an alias of %s@%s (same hash %s), skipping CRD indexing", t.name, fullRepo, originalName, originalRepo, h.String())
+					logger.Info("tag is an alias, skipping CRD indexing", "tag", t.name, "repo", fullRepo, "original_tag", originalName, "original_repo", originalRepo, "hash", h.String())
 				}
 				r := g.conn.QueryRow(ctx, "INSERT INTO tags(name, repo, time, hash_sha1, alias_tag_id) VALUES ($1, $2, $3, decode($4, 'hex'), $5) RETURNING id", t.name, fullRepo, c.Committer.When, h.String(), originalTagID)
 				if err := r.Scan(&tagID); err != nil {
@@ -347,19 +373,19 @@ func (g *Gitter) doIndex(ctx context.Context, gRepo models.GitterRepo, fullRepo 
 			} else {
 				if originalTagID != nil {
 					isAlias = true
-					log.Printf("[DRYRUN] Tag %s@%s would be an alias of %s@%s (same hash %s), skipping CRD indexing", t.name, fullRepo, originalName, originalRepo, h.String())
+					logger.Info("tag would be an alias, skipping CRD indexing", "tag", t.name, "repo", fullRepo, "original_tag", originalName, "original_repo", originalRepo, "hash", h.String(), "dry_run", true)
 				} else {
-					log.Printf("[DRYRUN] Would insert new tag %s@%s with hash %s", t.name, fullRepo, h.String())
+					logger.Info("would insert new tag", "tag", t.name, "repo", fullRepo, "hash", h.String(), "dry_run", true)
 				}
 			}
 		} else {
 			if existingHash != h.String() {
-				log.Printf("Tag %s@%s already exists with different hash (existing: %s, new: %s), skipping", t.name, fullRepo, existingHash, h.String())
+				logger.Warn("tag already exists with different hash, skipping", "tag", t.name, "repo", fullRepo, "existing_hash", existingHash, "new_hash", h.String())
 				continue
 			}
 			if existingAliasID != nil {
 				isAlias = true
-				log.Printf("Tag %s@%s is already an alias (alias_tag_id: %d), skipping CRD indexing", t.name, fullRepo, *existingAliasID)
+				logger.Info("tag is already an alias, skipping CRD indexing", "tag", t.name, "repo", fullRepo, "alias_tag_id", *existingAliasID)
 			}
 		}
 
@@ -370,11 +396,11 @@ func (g *Gitter) doIndex(ctx context.Context, gRepo models.GitterRepo, fullRepo 
 
 		repoCRDs, err := getCRDsFromTag(dir, t.name, h, w)
 		if err != nil {
-			log.Printf("Unable to get CRDs: %s@%s (%v)", repo, t.name, err)
+			logger.Error("unable to get CRDs", "tag", t.name, "hash", h.String(), "err", err)
 			continue
 		}
 		if len(repoCRDs) == 0 {
-			log.Printf("Skipping tag %s: no CRDs found", t.name)
+			logger.Info("skipping tag: no CRDs found", "tag", t.name)
 			continue
 		}
 
@@ -426,7 +452,7 @@ func getCRDsFromTag(dir string, tag string, hash *plumbing.Hash, w *git.Worktree
 	if err != nil {
 		return nil, fmt.Errorf("error grepping CRDs: %s@%s (%v)", tag, hash.String(), err)
 	}
-	fmt.Printf("Found %d CRD YAML files for tag %s\n", len(g), tag)
+	logger.Debug("found CRD YAML files for tag", "tag", tag, "count", len(g))
 
 	repoCRDs := map[string]models.RepoCRD{}
 	files := getYAMLs(g, dir)
@@ -434,17 +460,17 @@ func getCRDsFromTag(dir string, tag string, hash *plumbing.Hash, w *git.Worktree
 		for _, y := range yamls {
 			crder, err := crd.NewCRDer(y, crd.StripLabels(), crd.StripAnnotations(), crd.StripConversion())
 			if err != nil || crder.CRD == nil {
-				fmt.Printf("Skipping CRD YAML file %s@%s: error parsing: %v\n", file, hash.String(), err)
+				logger.Debug("skipping CRD YAML file: error parsing", "file", file, "hash", hash.String(), "err", err)
 				continue
 			}
 
 			cbytes, err := json.Marshal(crder.CRD)
 			if err != nil {
-				fmt.Printf("Skipping CRD YAML file %s@%s: error marshaling: %v\n", file, hash.String(), err)
+				logger.Debug("skipping CRD YAML file: error marshaling", "file", file, "hash", hash.String(), "err", err)
 				continue
 			}
 
-			fmt.Printf("Processed CRD %s from file %s@%s\n", crd.PrettyGVK(crder.GVK), file, hash.String())
+			logger.Debug("processed CRD", "gvk", crd.PrettyGVK(crder.GVK), "file", file, "hash", hash.String())
 			repoCRDs[crd.PrettyGVK(crder.GVK)] = models.RepoCRD{
 				Path:     crd.PrettyGVK(crder.GVK),
 				Filename: path.Base(file),
@@ -464,25 +490,25 @@ func getYAMLs(greps []git.GrepResult, dir string) map[string][][]byte {
 	for _, res := range greps {
 		fi, err := os.Stat(dir + "/" + res.FileName)
 		if err != nil {
-			log.Printf("failed to stat CRD file %s: %v", res.FileName, err)
+			logger.Warn("failed to stat CRD file", "file", res.FileName, "err", err)
 			continue
 		}
 
 		if fi.Size() > maxFileSize {
 			allCRDs[res.FileName] = [][]byte{}
-			log.Printf("skipping CRD file %s: file size %d exceeds limit %d", res.FileName, fi.Size(), maxFileSize)
+			logger.Warn("skipping CRD file: file size exceeds limit", "file", res.FileName, "size", fi.Size(), "limit", maxFileSize)
 			continue
 		}
 
 		b, err := os.ReadFile(dir + "/" + res.FileName)
 		if err != nil {
-			log.Printf("failed to read CRD file: %s", res.FileName)
+			logger.Warn("failed to read CRD file", "file", res.FileName, "err", err)
 			continue
 		}
 
 		yamls, err := splitYAML(b, res.FileName)
 		if err != nil {
-			log.Printf("failed to split/parse CRD file: %s", res.FileName)
+			logger.Warn("failed to split/parse CRD file", "file", res.FileName, "err", err)
 			continue
 		}
 
@@ -516,23 +542,23 @@ func splitYAML(file []byte, filename string) ([][]byte, error) {
 				break
 			}
 
-			log.Printf("error #%d: failed to decode part of CRD file: %s\n%s", errCount, filename, err)
+			logger.Warn("failed to decode part of CRD file", "file", filename, "error_count", errCount, "err", err)
 			errCount++
 			continue
 		}
 
 		docIndex++
 		if v, ok := node["kind"].(string); !ok {
-			log.Printf("skipping CRD YAML file %s, document index %d: missing kind field", filename, docIndex)
+			logger.Warn("skipping CRD YAML file: missing kind field", "file", filename, "doc_index", docIndex)
 			continue
 		} else if v != "CustomResourceDefinition" {
-			log.Printf("skipping CRD YAML file %s, document index %d: kind is %s, expecting CustomResourceDefinition", filename, docIndex, v)
+			logger.Warn("skipping CRD YAML file: unexpected kind", "file", filename, "doc_index", docIndex, "kind", v)
 			continue
 		}
 
 		doc, err := yaml.Marshal(node)
 		if err != nil {
-			log.Printf("error #%d: failed to reëncode CRD file %s, document index %d: %v", errCount, filename, docIndex, err)
+			logger.Warn("failed to reëncode CRD file", "file", filename, "doc_index", docIndex, "error_count", errCount, "err", err)
 			errCount++
 			continue
 		}

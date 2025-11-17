@@ -21,7 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/rpc"
 	"net/url"
@@ -36,10 +36,9 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
-	flag "github.com/spf13/pflag"
 	"github.com/unrolled/render"
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
-	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"sigs.k8s.io/yaml"
 )
 
@@ -70,6 +69,24 @@ var (
 
 	defaultCacheDuration = 4 * time.Hour
 )
+
+var logger *slog.Logger
+
+func parseLogLevel() slog.Level {
+	level := strings.ToLower(os.Getenv("LOG_LEVEL"))
+	switch level {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
 
 // SchemaPlusParent is a JSON schema plus the name of the parent field.
 type SchemaPlusParent struct {
@@ -185,7 +202,7 @@ func gitterPinger(gitterAddr string) {
 		client, err := rpc.DialHTTP("tcp", gitterAddr)
 		if err != nil {
 			if wasHealthy := gitterLastHealthy.Load(); wasHealthy {
-				log.Printf("Gitter became unhealthy: dialing error: %v", err)
+				logger.Warn("gitter became unhealthy: dialing error", "err", err)
 				gitterLastHealthy.Store(false)
 			}
 			return
@@ -194,13 +211,13 @@ func gitterPinger(gitterAddr string) {
 		reply := ""
 		if err := client.Call("Gitter.Ping", struct{}{}, &reply); err != nil {
 			if wasHealthy := gitterLastHealthy.Load(); wasHealthy {
-				log.Printf("Gitter became unhealthy: ping error: %v", err)
+				logger.Warn("gitter became unhealthy: ping error", "err", err)
 				gitterLastHealthy.Store(false)
 			}
 		} else {
 			gitterPingTime.Store(time.Now().Unix())
 			if wasHealthy := gitterLastHealthy.Load(); !wasHealthy {
-				log.Printf("Gitter became healthy (reply: %s)", reply)
+				logger.Info("gitter became healthy", "reply", reply)
 				gitterLastHealthy.Store(true)
 			}
 		}
@@ -247,7 +264,7 @@ func callGitterIndex(ctx context.Context, repo models.GitterRepo, gitterAddr str
 	select {
 	case <-dialDone:
 		if dialErr != nil {
-			log.Printf("dialing gitter failed: %v", dialErr)
+			logger.Error("dialing gitter failed", "err", dialErr)
 			return "", fmt.Errorf("unable to connect to indexing service")
 		}
 	case <-ctx.Done():
@@ -267,11 +284,11 @@ func callGitterIndex(ctx context.Context, repo models.GitterRepo, gitterAddr str
 	select {
 	case <-callDone:
 		if callErr != nil {
-			log.Printf("Gitter.Index error for %s/%s@%s: (reply=%s) %v", repo.Org, repo.Repo, repo.Tag, callReply, callErr)
+			logger.Error("gitter.Index error", "org", repo.Org, "repo", repo.Repo, "tag", repo.Tag, "reply", callReply, "err", callErr)
 			return callReply, callErr
 		}
 
-		log.Printf("Gitter.Index succeeded for %s/%s@%s: %s", repo.Org, repo.Repo, repo.Tag, callReply)
+		logger.Info("gitter.Index succeeded", "org", repo.Org, "repo", repo.Repo, "tag", repo.Tag, "reply", callReply)
 		return callReply, nil
 	case <-ctx.Done():
 		return "", fmt.Errorf("timeout waiting for indexing service response")
@@ -279,7 +296,11 @@ func callGitterIndex(ctx context.Context, repo models.GitterRepo, gitterAddr str
 }
 
 func main() {
-	flag.Parse()
+	logLevel := parseLogLevel()
+	logger = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+		Level: logLevel,
+	}))
+
 	dsn := os.Getenv("CRDS_DEV_STORAGE_DSN")
 	if dsn == "" {
 		dsn = fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", os.Getenv(userEnv), os.Getenv(passwordEnv), os.Getenv(hostEnv), os.Getenv(portEnv), os.Getenv(dbEnv))
@@ -287,11 +308,13 @@ func main() {
 
 	conn, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		panic(err)
+		logger.Error("failed to parse database config", "err", err)
+		os.Exit(1)
 	}
 	db, err = pgxpool.ConnectConfig(context.Background(), conn)
 	if err != nil {
-		panic(err)
+		logger.Error("failed to connect to database", "err", err)
+		os.Exit(1)
 	}
 
 	gitterAddr = defaultGitterAddr
@@ -299,7 +322,7 @@ func main() {
 		gitterAddr = value
 	}
 
-	log.Println("Gitter address:", gitterAddr)
+	logger.Info("gitter address", "addr", gitterAddr)
 
 	// Initialize semaphore for limiting concurrent RPC calls
 	gitterSemaphore = make(chan struct{}, 4)
@@ -328,8 +351,9 @@ func start() {
 		listenAddr = value
 	}
 
-	log.Println("Starting Doc server on", listenAddr)
+	logger.Info("starting doc server", "addr", listenAddr)
 	r := mux.NewRouter().StrictSlash(true)
+	r.Use(loggingMiddleware)
 	staticHandler := http.StripPrefix("/static/", http.FileServer(http.Dir("./static/")))
 	r.HandleFunc("/", home)
 	r.PathPrefix("/static/").Handler(staticHandler)
@@ -343,7 +367,10 @@ func start() {
 	r.HandleFunc("/raw/github.com/{org}/{repo}@{tag:[A-Za-z0-9._/+-]+}", raw)
 	r.HandleFunc("/raw/github.com/{org}/{repo}", raw)
 	r.PathPrefix("/").HandlerFunc(doc)
-	log.Fatal(http.ListenAndServe(listenAddr, r))
+	if err := http.ListenAndServe(listenAddr, r); err != nil {
+		logger.Error("failed to serve", "addr", listenAddr, "err", err)
+		os.Exit(1)
+	}
 }
 
 func home(w http.ResponseWriter, r *http.Request) {
@@ -351,11 +378,11 @@ func home(w http.ResponseWriter, r *http.Request) {
 
 	data := homeData{Page: getPageData(r, "Doc", true)}
 	if err := page.HTML(w, http.StatusOK, "home", data); err != nil {
-		log.Printf("homeTemplate.Execute(): %v", err)
+		logger.Error("failed to render home template", "err", err)
 		fmt.Fprint(w, "Unable to render home template.")
 		return
 	}
-	log.Print("successfully rendered home page")
+	logger.Info("rendered home page")
 }
 
 func listGVK(w http.ResponseWriter, r *http.Request) {
@@ -366,7 +393,7 @@ func listGVK(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := db.Query(r.Context(), "SELECT t.repo, t.name, t.time, encode(t.hash_sha1, 'hex'), t.alias_tag_id FROM tags t INNER JOIN crds c ON (c.tag_id = t.id) WHERE c.group=$1 AND c.version=$2 AND c.kind=$3 ORDER BY t.time DESC;", group, version, kind)
 	if err != nil {
-		log.Printf("failed to get repos for %s/%s/%s: %v", group, version, kind, err)
+		logger.Error("failed to get repos for GVK", "group", group, "version", version, "kind", kind, "err", err)
 		http.Error(w, "Unable to get repositories for supplied GVK.", http.StatusInternalServerError)
 		return
 	}
@@ -385,7 +412,7 @@ func listGVK(w http.ResponseWriter, r *http.Request) {
 		var hashSHA1 string
 		var aliasTagID *int
 		if err := rows.Scan(&repo, &tag, &timestamp, &hashSHA1, &aliasTagID); err != nil {
-			log.Printf("failed to scan repo row for %s/%s/%s: %v", group, version, kind, err)
+			logger.Error("failed to scan repo row for GVK", "group", group, "version", version, "kind", kind, "err", err)
 			fmt.Fprint(w, "Unable to get repositories for supplied GVK.")
 			return
 		}
@@ -405,11 +432,11 @@ func listGVK(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := page.HTML(w, http.StatusOK, "list_gvk", data); err != nil {
-		log.Printf("listGVKTemplate.Execute(): %v", err)
+		logger.Error("failed to render list GVK template", "group", group, "version", version, "kind", kind, "err", err)
 		fmt.Fprint(w, "Unable to render list GVK template.")
 		return
 	}
-	log.Printf("successfully rendered list GVK template for %s/%s/%s", group, version, kind)
+	logger.Info("rendered list GVK template", "group", group, "version", version, "kind", kind)
 }
 
 func listGroupVersion(w http.ResponseWriter, r *http.Request) {
@@ -419,7 +446,7 @@ func listGroupVersion(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := db.Query(r.Context(), "SELECT c.kind, COUNT(1) FROM crds c WHERE c.group=$1 AND c.version=$2 GROUP BY c.kind;", group, version)
 	if err != nil {
-		log.Printf("failed to get repos for %s/%s: %v", group, version, err)
+		logger.Error("failed to get repos for group-version", "group", group, "version", version, "err", err)
 		http.Error(w, "Unable to get repositories for supplied group-version.", http.StatusInternalServerError)
 		return
 	}
@@ -435,7 +462,7 @@ func listGroupVersion(w http.ResponseWriter, r *http.Request) {
 		var kind string
 		var count int
 		if err := rows.Scan(&kind, &count); err != nil {
-			log.Printf("failed to scan repo row for %s/%s: %v", group, version, err)
+			logger.Error("failed to scan repo row for group-version", "group", group, "version", version, "err", err)
 			fmt.Fprint(w, "Unable to get repositories for supplied group-version.")
 			return
 		}
@@ -450,11 +477,11 @@ func listGroupVersion(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := page.HTML(w, http.StatusOK, "list_group_version", data); err != nil {
-		log.Printf("listGroupVersionTemplate.Execute(): %v", err)
+		logger.Error("failed to render list group-version template", "group", group, "version", version, "err", err)
 		fmt.Fprint(w, "Unable to render list group-version template.")
 		return
 	}
-	log.Printf("successfully rendered list group-version template for %s/%s", group, version)
+	logger.Info("rendered list group-version template", "group", group, "version", version)
 }
 
 func listGroups(w http.ResponseWriter, r *http.Request) {
@@ -463,7 +490,7 @@ func listGroups(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := db.Query(r.Context(), "SELECT c.version, COUNT(DISTINCT c.kind) FROM crds c WHERE c.group=$1 GROUP BY c.version;", group)
 	if err != nil {
-		log.Printf("failed to get versions for %s: %v", group, err)
+		logger.Error("failed to get versions for group", "group", group, "err", err)
 		http.Error(w, "Unable to get versions for supplied group.", http.StatusInternalServerError)
 		return
 	}
@@ -478,7 +505,7 @@ func listGroups(w http.ResponseWriter, r *http.Request) {
 		var version string
 		var count int
 		if err := rows.Scan(&version, &count); err != nil {
-			log.Printf("failed to scan version row for %s: %v", group, err)
+			logger.Error("failed to scan version row for group", "group", group, "err", err)
 			fmt.Fprint(w, "Unable to get versions for supplied group.")
 			return
 		}
@@ -493,17 +520,17 @@ func listGroups(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := page.HTML(w, http.StatusOK, "list_groups", data); err != nil {
-		log.Printf("listGroupsTemplate.Execute(): %v", err)
+		logger.Error("failed to render list groups template", "group", group, "err", err)
 		fmt.Fprint(w, "Unable to render list groups template.")
 		return
 	}
-	log.Printf("successfully rendered list groups template for %s", group)
+	logger.Info("rendered list groups template", "group", group)
 }
 
 func listAllGroups(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.Query(r.Context(), "SELECT c.group, COUNT(DISTINCT c.version), COUNT(DISTINCT c.kind) FROM crds c GROUP BY c.group ORDER BY c.group;")
 	if err != nil {
-		log.Printf("failed to get all groups: %v", err)
+		logger.Error("failed to get all groups", "err", err)
 		http.Error(w, "Unable to get all groups.", http.StatusInternalServerError)
 		return
 	}
@@ -517,7 +544,7 @@ func listAllGroups(w http.ResponseWriter, r *http.Request) {
 		var group string
 		var versionCount, kindCount int
 		if err := rows.Scan(&group, &versionCount, &kindCount); err != nil {
-			log.Printf("failed to scan all groups row: %v", err)
+			logger.Error("failed to scan all groups row", "err", err)
 			fmt.Fprint(w, "Unable to get all groups.")
 			return
 		}
@@ -530,11 +557,11 @@ func listAllGroups(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := page.HTML(w, http.StatusOK, "list_all_groups", data); err != nil {
-		log.Printf("listAllGroupsTemplate.Execute(): %v", err)
+		logger.Error("failed to render list all groups template", "err", err)
 		fmt.Fprint(w, "Unable to render list all groups template.")
 		return
 	}
-	log.Printf("successfully rendered list all groups template")
+	logger.Info("rendered list all groups template")
 }
 
 func raw(w http.ResponseWriter, r *http.Request) {
@@ -546,7 +573,7 @@ func raw(w http.ResponseWriter, r *http.Request) {
 	// Validate tag if present
 	if tag != "" {
 		if err := validation.ValidateTag(tag); err != nil {
-			log.Printf("invalid tag format in raw handler: %q from %s", tag, r.RemoteAddr)
+			logger.Warn("invalid tag format in raw handler", "tag", tag, "remote_addr", r.RemoteAddr, "err", err)
 			http.Error(w, "invalid tag format", http.StatusBadRequest)
 			return
 		}
@@ -571,11 +598,11 @@ func raw(w http.ResponseWriter, r *http.Request) {
 		if err := yaml.Unmarshal(res, crd); err != nil {
 			break
 		}
-		crdv1 := &v1.CustomResourceDefinition{}
-		if err := v1.Convert_apiextensions_CustomResourceDefinition_To_v1_CustomResourceDefinition(crd, crdv1, nil); err != nil {
+		crdv1 := &apiextensionsv1.CustomResourceDefinition{}
+		if err := apiextensionsv1.Convert_apiextensions_CustomResourceDefinition_To_v1_CustomResourceDefinition(crd, crdv1, nil); err != nil {
 			break
 		}
-		crdv1.SetGroupVersionKind(v1.SchemeGroupVersion.WithKind("CustomResourceDefinition"))
+		crdv1.SetGroupVersionKind(apiextensionsv1.SchemeGroupVersion.WithKind("CustomResourceDefinition"))
 		y, err := yaml.Marshal(crdv1)
 		if err != nil {
 			break
@@ -586,10 +613,10 @@ func raw(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		fmt.Fprint(w, "Unable to render raw CRDs.")
-		log.Printf("failed to get raw CRDs for %s (%s): %v", repo, fullRepo, err)
+		logger.Error("failed to get raw CRDs", "repo", repo, "full_repo", fullRepo, "err", err)
 	} else {
 		w.Write([]byte(total))
-		log.Printf("successfully rendered raw CRDs")
+		logger.Info("rendered raw CRDs", "repo", repo)
 	}
 }
 
@@ -609,7 +636,7 @@ func listTags(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := db.Query(r.Context(), "SELECT name, time, encode(hash_sha1, 'hex'), alias_tag_id FROM tags WHERE LOWER(repo)=LOWER($1) ORDER BY time DESC;", fullRepo)
 	if err != nil {
-		log.Printf("failed to get tags for %s : %v", repo, err)
+		logger.Error("failed to get tags for repo", "repo", repo, "err", err)
 		http.Error(w, "Unable to get tags.", http.StatusInternalServerError)
 		return
 	}
@@ -621,7 +648,7 @@ func listTags(w http.ResponseWriter, r *http.Request) {
 		var hashSHA1 string
 		var aliasTagID *int
 		if err := rows.Scan(&t, &ts, &hashSHA1, &aliasTagID); err != nil {
-			log.Printf("listTags(): %v", err)
+			logger.Error("failed to scan tag row", "err", err)
 			fmt.Fprint(w, "Unable to render tags.")
 			return
 		}
@@ -650,7 +677,7 @@ func listTags(w http.ResponseWriter, r *http.Request) {
 
 		emitCacheControl(w, 0)
 		if err := page.HTML(w, http.StatusOK, "new", data); err != nil {
-			log.Printf("newTemplate.Execute(): %v", err)
+			logger.Error("failed to render new template", "err", err)
 			fmt.Fprint(w, "Unable to render new template.")
 		}
 		return
@@ -662,11 +689,11 @@ func listTags(w http.ResponseWriter, r *http.Request) {
 		Tags:  tags,
 		Total: len(tags),
 	}); err != nil {
-		log.Printf("listTagsTemplate.Execute(): %v", err)
+		logger.Error("failed to render list tags template", "org", org, "repo", repo, "err", err)
 		fmt.Fprint(w, "Unable to render list tags template.")
 		return
 	}
-	log.Printf("successfully rendered list tags template for %s/%s", org, repo)
+	logger.Info("rendered list tags template", "org", org, "repo", repo)
 }
 
 type listRecentlyIndexedReposData struct {
@@ -678,7 +705,7 @@ func listRecentlyIndexedRepos(w http.ResponseWriter, r *http.Request) {
 	pageData := getPageData(r, "Recently Indexed Repositories", false)
 	rows, err := db.Query(r.Context(), "SELECT t.repo, t.name, t.time FROM tags t ORDER BY t.time DESC LIMIT 20;")
 	if err != nil {
-		log.Printf("failed to get recently indexed repos: %v", err)
+		logger.Error("failed to get recently indexed repos", "err", err)
 		http.Error(w, "Unable to get recently indexed repositories.", http.StatusInternalServerError)
 		return
 	}
@@ -688,7 +715,7 @@ func listRecentlyIndexedRepos(w http.ResponseWriter, r *http.Request) {
 		var repo, tag string
 		var timestamp time.Time
 		if err := rows.Scan(&repo, &tag, &timestamp); err != nil {
-			log.Printf("listRecentlyIndexedRepos(): %v", err)
+			logger.Error("failed to scan recently indexed repos row", "err", err)
 			fmt.Fprint(w, "Unable to render recently indexed repositories.")
 			return
 		}
@@ -703,12 +730,12 @@ func listRecentlyIndexedRepos(w http.ResponseWriter, r *http.Request) {
 		Page:     pageData,
 		Repotags: repotags,
 	}); err != nil {
-		log.Printf("listRecentlyIndexedReposTemplate.Execute(): %v", err)
+		logger.Error("failed to render recently indexed repositories template", "err", err)
 		fmt.Fprint(w, "Unable to render recently indexed repositories template.")
 		return
 	}
 
-	log.Printf("successfully rendered recently indexed repositories template")
+	logger.Info("rendered recently indexed repositories template")
 }
 
 func org(w http.ResponseWriter, r *http.Request) {
@@ -719,7 +746,7 @@ func org(w http.ResponseWriter, r *http.Request) {
 
 	// Validate tag format
 	if err := validation.ValidateTag(tag); err != nil {
-		log.Printf("invalid tag format in org handler: %q from %s", tag, r.RemoteAddr)
+		logger.Warn("invalid tag format in org handler", "tag", tag, "remote_addr", r.RemoteAddr, "err", err)
 		http.Error(w, "invalid tag format", http.StatusBadRequest)
 		return
 	}
@@ -735,11 +762,11 @@ func org(w http.ResponseWriter, r *http.Request) {
 	defer br.Close()
 	c, err := br.Query()
 	if err != nil {
-		log.Printf("failed to get CRDs for %s (%s): %v", repo, fullRepo, err)
+		logger.Error("failed to get CRDs for repo", "repo", repo, "full_repo", fullRepo, "err", err)
 
 		emitCacheControl(w, 0)
 		if err := page.HTML(w, http.StatusOK, "new", baseData{Page: pageData}); err != nil {
-			log.Printf("newTemplate.Execute(): %v", err)
+			logger.Error("failed to render new template", "err", err)
 			fmt.Fprint(w, "Unable to render new template.")
 		}
 		return
@@ -750,7 +777,7 @@ func org(w http.ResponseWriter, r *http.Request) {
 	for c.Next() {
 		var t, g, v, k string
 		if err := c.Scan(&t, &g, &v, &k); err != nil {
-			log.Printf("newTemplate.Execute(): %v", err)
+			logger.Error("failed to scan CRD row", "err", err)
 			fmt.Fprint(w, "Unable to render new template.")
 		}
 		foundTag = t
@@ -762,11 +789,11 @@ func org(w http.ResponseWriter, r *http.Request) {
 	}
 	c, err = br.Query()
 	if err != nil {
-		log.Printf("failed to get tags for %s : %v", repo, err)
+		logger.Error("failed to get tags for repo", "repo", repo, "err", err)
 
 		emitCacheControl(w, 0)
 		if err := page.HTML(w, http.StatusOK, "new", baseData{Page: pageData}); err != nil {
-			log.Printf("newTemplate.Execute(): %v", err)
+			logger.Error("failed to render new template", "err", err)
 			fmt.Fprint(w, "Unable to render new template.")
 		}
 		return
@@ -779,7 +806,7 @@ func org(w http.ResponseWriter, r *http.Request) {
 		var hashSHA1 string
 		var aliasTagID *int
 		if err := c.Scan(&t, &ts, &hashSHA1, &aliasTagID); err != nil {
-			log.Printf("newTemplate.Execute(): %v", err)
+			logger.Error("failed to scan tag row", "err", err)
 			fmt.Fprint(w, "Unable to render new template.")
 		}
 		if !tagExists && t == tag {
@@ -808,7 +835,7 @@ func org(w http.ResponseWriter, r *http.Request) {
 
 		emitCacheControl(w, 0)
 		if err := page.HTML(w, http.StatusOK, "new", data); err != nil {
-			log.Printf("newTemplate.Execute(): %v", err)
+			logger.Error("failed to render new template", "err", err)
 			fmt.Fprint(w, "Unable to render new template.")
 		}
 		return
@@ -833,27 +860,26 @@ func org(w http.ResponseWriter, r *http.Request) {
 		CRDs:  repoCRDs,
 		Total: len(repoCRDs),
 	}); err != nil {
-		log.Printf("orgTemplate.Execute(): %v", err)
+		logger.Error("failed to render org template", "org", org, "repo", repo, "tag", foundTag, "err", err)
 		fmt.Fprint(w, "Unable to render org template.")
 		return
 	}
-	log.Printf("successfully rendered org template %s/%s:%s", org, repo, foundTag)
+	logger.Info("rendered org template", "org", org, "repo", repo, "tag", foundTag)
 }
 
 func doc(w http.ResponseWriter, r *http.Request) {
 	var schema *apiextensions.CustomResourceValidation
 	crd := &apiextensions.CustomResourceDefinition{}
-	log.Printf("Request Received: %s\n", r.URL.Path)
 	org, repo, group, kind, version, tag, err := parseGHURL(strings.TrimPrefix(r.URL.Path, "/repo"))
 	if err != nil {
-		log.Printf("failed to parse Github path %q: %v", r.URL.Path, err)
+		logger.Warn("failed to parse Github path", "path", r.URL.Path, "err", err)
 		http.Error(w, "Repository not found.", http.StatusNotFound)
 		return
 	}
 
 	if tag != "" {
 		if err := validation.ValidateTag(tag); err != nil {
-			log.Printf("invalid tag format in doc handler: %q from %s", tag, r.RemoteAddr)
+			logger.Warn("invalid tag format in doc handler", "tag", tag, "remote_addr", r.RemoteAddr, "err", err)
 			http.Error(w, "invalid tag format", http.StatusBadRequest)
 			return
 		}
@@ -874,9 +900,9 @@ func doc(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		log.Printf("failed to get CRDs for %s (%s): %v", repo, fullRepo, err)
+		logger.Error("failed to get CRDs for repo", "repo", repo, "full_repo", fullRepo, "err", err)
 		if err := page.HTML(w, http.StatusOK, "doc", baseData{Page: pageData}); err != nil {
-			log.Printf("newTemplate.Execute(): %v", err)
+			logger.Error("failed to render new template", "err", err)
 			fmt.Fprint(w, "Unable to render new template.")
 			return
 		}
@@ -894,14 +920,14 @@ func doc(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if schema == nil || schema.OpenAPIV3Schema == nil {
-		log.Print("CRD schema is nil.")
+		logger.Warn("CRD schema is nil", "repo", repo, "group", group, "version", version, "kind", kind)
 		fmt.Fprint(w, "Supplied CRD has no schema.")
 		return
 	}
 
 	gvk := crdutil.GetStoredGVK(crd)
 	if gvk == nil {
-		log.Print("CRD GVK is nil.")
+		logger.Warn("CRD GVK is nil", "repo", repo)
 		fmt.Fprint(w, "Supplied CRD has no GVK.")
 		return
 	}
@@ -916,11 +942,11 @@ func doc(w http.ResponseWriter, r *http.Request) {
 		Description: string(schema.OpenAPIV3Schema.Description),
 		Schema:      *schema.OpenAPIV3Schema,
 	}); err != nil {
-		log.Printf("docTemplate.Execute(): %v", err)
+		logger.Error("failed to render doc template", "err", err)
 		fmt.Fprint(w, "Supplied CRD has no schema.")
 		return
 	}
-	log.Printf("successfully rendered doc template")
+	logger.Info("rendered doc template", "org", org, "repo", repo, "group", gvk.Group, "version", gvk.Version, "kind", gvk.Kind)
 }
 
 // TODO(hasheddan): add testing and more reliable parse
