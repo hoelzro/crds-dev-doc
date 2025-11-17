@@ -24,7 +24,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/rpc"
-	"net/url"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -575,7 +574,7 @@ func raw(w http.ResponseWriter, r *http.Request) {
 	if tag != "" {
 		if err := validation.ValidateTag(tag); err != nil {
 			logger.Warn("invalid tag format in raw handler", "tag", tag, "remote_addr", r.RemoteAddr, "err", err)
-			http.Error(w, "invalid tag format", http.StatusBadRequest)
+			http.Error(w, "Invalid tag format.", http.StatusBadRequest)
 			return
 		}
 	}
@@ -750,7 +749,7 @@ func org(w http.ResponseWriter, r *http.Request) {
 	// Validate tag format
 	if err := validation.ValidateTag(tag); err != nil {
 		logger.Warn("invalid tag format in org handler", "tag", tag, "remote_addr", r.RemoteAddr, "err", err)
-		http.Error(w, "invalid tag format", http.StatusBadRequest)
+		http.Error(w, "Invalid tag format.", http.StatusBadRequest)
 		return
 	}
 
@@ -873,9 +872,13 @@ func org(w http.ResponseWriter, r *http.Request) {
 }
 
 func doc(w http.ResponseWriter, r *http.Request) {
-	var schema *apiextensions.CustomResourceValidation
-	crd := &apiextensions.CustomResourceDefinition{}
-	org, repo, group, kind, version, tag, err := parseGHURL(strings.TrimPrefix(r.URL.Path, "/repo"))
+	rest, ok := strings.CutPrefix(r.URL.Path, "/repo")
+	if !ok {
+		http.Error(w, "Invalid URL.", http.StatusNotFound)
+		return
+	}
+
+	org, repo, group, kind, version, tag, err := parseGHURL(rest)
 	if err != nil {
 		logger.Warn("failed to parse Github path", "path", r.URL.Path, "err", err)
 		http.Error(w, "Repository not found.", http.StatusNotFound)
@@ -885,7 +888,7 @@ func doc(w http.ResponseWriter, r *http.Request) {
 	if tag != "" {
 		if err := validation.ValidateTag(tag); err != nil {
 			logger.Warn("invalid tag format in doc handler", "tag", tag, "remote_addr", r.RemoteAddr, "err", err)
-			http.Error(w, "invalid tag format", http.StatusBadRequest)
+			http.Error(w, "Invalid tag format.", http.StatusBadRequest)
 			return
 		}
 	}
@@ -898,7 +901,9 @@ func doc(w http.ResponseWriter, r *http.Request) {
 	} else {
 		c = db.QueryRow(r.Context(), "SELECT t.name, c.data::jsonb FROM tags t INNER JOIN crds c ON (c.tag_id = COALESCE(t.alias_tag_id, t.id)) WHERE LOWER(t.repo)=LOWER($1) AND t.name=$2 AND c.group=$3 AND c.version=$4 AND c.kind=$5;", fullRepo, tag, group, version, kind)
 	}
+
 	foundTag := tag
+	crd := &apiextensions.CustomResourceDefinition{}
 	if err := c.Scan(&foundTag, crd); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			http.Error(w, "CRD not found.", http.StatusNotFound)
@@ -912,7 +917,8 @@ func doc(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	schema = crd.Spec.Validation
+
+	schema := crd.Spec.Validation
 	if len(crd.Spec.Versions) > 1 {
 		for _, version := range crd.Spec.Versions {
 			if version.Storage == true {
@@ -953,25 +959,6 @@ func doc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logger.Info("rendered doc template", "org", org, "repo", repo, "group", gvk.Group, "version", gvk.Version, "kind", gvk.Kind)
-}
-
-// TODO(hasheddan): add testing and more reliable parse
-func parseGHURL(uPath string) (org, repo, group, version, kind, tag string, err error) {
-	u, err := url.Parse(uPath)
-	if err != nil {
-		return "", "", "", "", "", "", err
-	}
-	elements := strings.Split(strings.Trim(u.Path, "/"), "/")
-	if len(elements) < 6 {
-		return "", "", "", "", "", "", errors.New("invalid path")
-	}
-
-	tagSplit := strings.Split(u.Path, "@")
-	if len(tagSplit) > 1 {
-		tag = tagSplit[1]
-	}
-
-	return elements[1], elements[2], elements[3], elements[4], strings.Split(elements[5], "@")[0], tag, nil
 }
 
 func emitCacheControl(w http.ResponseWriter, duration time.Duration) {
