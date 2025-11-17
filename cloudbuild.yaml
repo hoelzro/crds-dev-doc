@@ -13,6 +13,8 @@ steps:
       - '--label'
       - 'org.opencontainers.image.revision=$COMMIT_SHA'
       - '--label'
+      - 'net.r8y.build.id=$BUILD_ID'
+      - '--label'
       - 'net.r8y.build.trigger=$TRIGGER_NAME'
       - '-f'
       - 'Dockerfile'
