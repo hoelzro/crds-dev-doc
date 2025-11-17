@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 )
@@ -13,9 +14,14 @@ func parseGHURL(uPath string) (org, repo, group, version, kind, tag string, err 
 	if err != nil {
 		return "", "", "", "", "", "", err
 	}
+
 	elements := strings.SplitN(strings.Trim(u.Path, "/"), "/", 6)
 	if len(elements) != 6 {
 		return "", "", "", "", "", "", ErrInvalidPath
+	}
+
+	if elements[0] != "github.com" {
+		return "", "", "", "", "", "", fmt.Errorf("%w: not a github.com url", ErrInvalidPath)
 	}
 
 	tagSplit := strings.Split(elements[5], "@")

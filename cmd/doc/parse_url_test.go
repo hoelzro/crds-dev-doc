@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -18,7 +19,7 @@ func TestParseGHURL(t *testing.T) {
 	}{
 		{
 			name:        "basic path without tag",
-			uPath:       "/prefix/myorg/myrepo/apps/v1/Deployment",
+			uPath:       "/github.com/myorg/myrepo/apps/v1/Deployment",
 			wantOrg:     "myorg",
 			wantRepo:    "myrepo",
 			wantGroup:   "apps",
@@ -29,7 +30,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "path with hyphens and underscores",
-			uPath:       "/api/my-org/my_repo/cert-manager.io/v1alpha1/Certificate",
+			uPath:       "/github.com/my-org/my_repo/cert-manager.io/v1alpha1/Certificate",
 			wantOrg:     "my-org",
 			wantRepo:    "my_repo",
 			wantGroup:   "cert-manager.io",
@@ -51,7 +52,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "minimal valid path - exactly 6 elements",
-			uPath:       "/a/b/c/d/e/f",
+			uPath:       "/github.com/b/c/d/e/f",
 			wantOrg:     "b",
 			wantRepo:    "c",
 			wantGroup:   "d",
@@ -62,7 +63,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "path with more than 6 elements",
-			uPath:       "/prefix/org/repo/group/version/kind/extra/elements",
+			uPath:       "/github.com/org/repo/group/version/kind/extra/elements",
 			wantOrg:     "org",
 			wantRepo:    "repo",
 			wantGroup:   "group",
@@ -73,7 +74,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "path with trailing slash",
-			uPath:       "/prefix/org/repo/group/version/kind/",
+			uPath:       "/github.com/org/repo/group/version/kind/",
 			wantOrg:     "org",
 			wantRepo:    "repo",
 			wantGroup:   "group",
@@ -84,7 +85,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "path without leading slash",
-			uPath:       "prefix/org/repo/group/version/kind",
+			uPath:       "github.com/org/repo/group/version/kind",
 			wantOrg:     "org",
 			wantRepo:    "repo",
 			wantGroup:   "group",
@@ -96,7 +97,7 @@ func TestParseGHURL(t *testing.T) {
 
 		{
 			name:        "path with simple tag",
-			uPath:       "/prefix/org/repo/group/v1/Kind@v1.0.0",
+			uPath:       "/github.com/org/repo/group/v1/Kind@v1.0.0",
 			wantOrg:     "org",
 			wantRepo:    "repo",
 			wantGroup:   "group",
@@ -118,7 +119,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "path with tag containing dashes",
-			uPath:       "/prefix/org/repo/group/v1/Kind@release-1.2.3",
+			uPath:       "/github.com/org/repo/group/v1/Kind@release-1.2.3",
 			wantOrg:     "org",
 			wantRepo:    "repo",
 			wantGroup:   "group",
@@ -129,7 +130,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "path with tag containing slashes",
-			uPath:       "/prefix/org/repo/group/v1/Kind@feature/x/y",
+			uPath:       "/github.com/org/repo/group/v1/Kind@feature/x/y",
 			wantOrg:     "org",
 			wantRepo:    "repo",
 			wantGroup:   "group",
@@ -140,7 +141,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "path with alpha tag",
-			uPath:       "/prefix/org/repo/group/v1alpha1/CustomResource@v1.0.0-alpha.1",
+			uPath:       "/github.com/org/repo/group/v1alpha1/CustomResource@v1.0.0-alpha.1",
 			wantOrg:     "org",
 			wantRepo:    "repo",
 			wantGroup:   "group",
@@ -151,7 +152,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "path with short tag",
-			uPath:       "/prefix/org/repo/group/v1/Kind@v1",
+			uPath:       "/github.com/org/repo/group/v1/Kind@v1",
 			wantOrg:     "org",
 			wantRepo:    "repo",
 			wantGroup:   "group",
@@ -162,7 +163,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "path with tag at exactly position 6",
-			uPath:       "/a/b/c/d/e/f@tag",
+			uPath:       "/github.com/b/c/d/e/f@tag",
 			wantOrg:     "b",
 			wantRepo:    "c",
 			wantGroup:   "d",
@@ -174,7 +175,7 @@ func TestParseGHURL(t *testing.T) {
 
 		{
 			name:        "multiple @ symbols - first one wins for tag",
-			uPath:       "/prefix/org/repo/group/v1/Kind@tag1@tag2",
+			uPath:       "/github.com/org/repo/group/v1/Kind@tag1@tag2",
 			wantOrg:     "org",
 			wantRepo:    "repo",
 			wantGroup:   "group",
@@ -185,7 +186,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "tag with slashes",
-			uPath:       "/prefix/org/repo/group/v1/Kind@feature/x/v1.0",
+			uPath:       "/github.com/org/repo/group/v1/Kind@feature/x/v1.0",
 			wantOrg:     "org",
 			wantRepo:    "repo",
 			wantGroup:   "group",
@@ -196,7 +197,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "@ in middle of path before kind",
-			uPath:       "/prefix/org@something/repo/group/v1/Kind",
+			uPath:       "/github.com/org@something/repo/group/v1/Kind",
 			wantOrg:     "org@something",
 			wantRepo:    "repo",
 			wantGroup:   "group",
@@ -207,7 +208,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "@ in org position",
-			uPath:       "/prefix/@org/repo/group/v1/Kind",
+			uPath:       "/github.com/@org/repo/group/v1/Kind",
 			wantOrg:     "@org",
 			wantRepo:    "repo",
 			wantGroup:   "group",
@@ -218,7 +219,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "empty tag after @",
-			uPath:       "/prefix/org/repo/group/v1/Kind@",
+			uPath:       "/github.com/org/repo/group/v1/Kind@",
 			wantOrg:     "org",
 			wantRepo:    "repo",
 			wantGroup:   "group",
@@ -226,6 +227,17 @@ func TestParseGHURL(t *testing.T) {
 			wantKind:    "Kind",
 			wantTag:     "",
 			wantErr:     nil,
+		},
+		{
+			name:        "non-github.com URL",
+			uPath:       "/failhub.com/org/repo/group/v1/Kind",
+			wantOrg:     "",
+			wantRepo:    "",
+			wantGroup:   "",
+			wantVersion: "",
+			wantKind:    "",
+			wantTag:     "",
+			wantErr:     ErrInvalidPath,
 		},
 
 		{
@@ -252,7 +264,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "one element",
-			uPath:       "/prefix",
+			uPath:       "/github.com",
 			wantOrg:     "",
 			wantRepo:    "",
 			wantGroup:   "",
@@ -263,7 +275,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "two elements",
-			uPath:       "/prefix/org",
+			uPath:       "/github.com/org",
 			wantOrg:     "",
 			wantRepo:    "",
 			wantGroup:   "",
@@ -274,7 +286,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "three elements",
-			uPath:       "/prefix/org/repo",
+			uPath:       "/github.com/org/repo",
 			wantOrg:     "",
 			wantRepo:    "",
 			wantGroup:   "",
@@ -285,7 +297,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "four elements",
-			uPath:       "/prefix/org/repo/group",
+			uPath:       "/github.com/org/repo/group",
 			wantOrg:     "",
 			wantRepo:    "",
 			wantGroup:   "",
@@ -296,7 +308,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "five elements",
-			uPath:       "/prefix/org/repo/group/version",
+			uPath:       "/github.com/org/repo/group/version",
 			wantOrg:     "",
 			wantRepo:    "",
 			wantGroup:   "",
@@ -308,7 +320,7 @@ func TestParseGHURL(t *testing.T) {
 
 		{
 			name:        "empty segment in middle",
-			uPath:       "/prefix/org//group/version/kind",
+			uPath:       "/github.com/org//group/version/kind",
 			wantOrg:     "org",
 			wantRepo:    "",
 			wantGroup:   "group",
@@ -319,7 +331,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "multiple empty segments",
-			uPath:       "/prefix///group/version/kind",
+			uPath:       "/github.com///group/version/kind",
 			wantOrg:     "",
 			wantRepo:    "",
 			wantGroup:   "group",
@@ -331,7 +343,7 @@ func TestParseGHURL(t *testing.T) {
 
 		{
 			name:        "path with query string",
-			uPath:       "/prefix/org/repo/group/v1/Kind?foo=bar",
+			uPath:       "/github.com/org/repo/group/v1/Kind?foo=bar",
 			wantOrg:     "org",
 			wantRepo:    "repo",
 			wantGroup:   "group",
@@ -342,7 +354,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "path with fragment",
-			uPath:       "/prefix/org/repo/group/v1/Kind#section",
+			uPath:       "/github.com/org/repo/group/v1/Kind#section",
 			wantOrg:     "org",
 			wantRepo:    "repo",
 			wantGroup:   "group",
@@ -353,7 +365,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "path with query and fragment",
-			uPath:       "/prefix/org/repo/group/v1/Kind?foo=bar#section",
+			uPath:       "/github.com/org/repo/group/v1/Kind?foo=bar#section",
 			wantOrg:     "org",
 			wantRepo:    "repo",
 			wantGroup:   "group",
@@ -364,7 +376,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "path with tag and query string",
-			uPath:       "/prefix/org/repo/group/v1/Kind@v1.0.0?foo=bar",
+			uPath:       "/github.com/org/repo/group/v1/Kind@v1.0.0?foo=bar",
 			wantOrg:     "org",
 			wantRepo:    "repo",
 			wantGroup:   "group",
@@ -376,7 +388,7 @@ func TestParseGHURL(t *testing.T) {
 
 		{
 			name:        "numeric org and repo",
-			uPath:       "/prefix/123/456/group/v1/Kind",
+			uPath:       "/github.com/123/456/group/v1/Kind",
 			wantOrg:     "123",
 			wantRepo:    "456",
 			wantGroup:   "group",
@@ -387,7 +399,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "camelCase components",
-			uPath:       "/prefix/MyOrg/MyRepo/myGroup/v1beta1/MyKind",
+			uPath:       "/github.com/MyOrg/MyRepo/myGroup/v1beta1/MyKind",
 			wantOrg:     "MyOrg",
 			wantRepo:    "MyRepo",
 			wantGroup:   "myGroup",
@@ -398,7 +410,7 @@ func TestParseGHURL(t *testing.T) {
 		},
 		{
 			name:        "long path components",
-			uPath:       "/prefix/very-long-organization-name/very-long-repository-name/very.long.group.name/v1alpha1/VeryLongKindName",
+			uPath:       "/github.com/very-long-organization-name/very-long-repository-name/very.long.group.name/v1alpha1/VeryLongKindName",
 			wantOrg:     "very-long-organization-name",
 			wantRepo:    "very-long-repository-name",
 			wantGroup:   "very.long.group.name",
@@ -447,7 +459,7 @@ func TestParseGHURL(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			gotOrg, gotRepo, gotGroup, gotVersion, gotKind, gotTag, err := parseGHURL(tt.uPath)
 
-			if err != tt.wantErr {
+			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("parseGHURL() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
