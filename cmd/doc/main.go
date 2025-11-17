@@ -574,7 +574,7 @@ func raw(w http.ResponseWriter, r *http.Request) {
 	if tag != "" {
 		if err := validation.ValidateTag(tag); err != nil {
 			logger.Warn("invalid tag format in raw handler", "tag", tag, "remote_addr", r.RemoteAddr, "err", err)
-			http.Error(w, "invalid tag format", http.StatusBadRequest)
+			http.Error(w, "Invalid tag format.", http.StatusBadRequest)
 			return
 		}
 	}
@@ -749,7 +749,7 @@ func org(w http.ResponseWriter, r *http.Request) {
 	// Validate tag format
 	if err := validation.ValidateTag(tag); err != nil {
 		logger.Warn("invalid tag format in org handler", "tag", tag, "remote_addr", r.RemoteAddr, "err", err)
-		http.Error(w, "invalid tag format", http.StatusBadRequest)
+		http.Error(w, "Invalid tag format.", http.StatusBadRequest)
 		return
 	}
 
@@ -888,7 +888,7 @@ func doc(w http.ResponseWriter, r *http.Request) {
 	if tag != "" {
 		if err := validation.ValidateTag(tag); err != nil {
 			logger.Warn("invalid tag format in doc handler", "tag", tag, "remote_addr", r.RemoteAddr, "err", err)
-			http.Error(w, "invalid tag format", http.StatusBadRequest)
+			http.Error(w, "Invalid tag format.", http.StatusBadRequest)
 			return
 		}
 	}
