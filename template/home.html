@@ -52,7 +52,6 @@
 
 {{ template "_scripts" . }}
 <script type="module">
-    const { render } = ReactDOM;
     const { useState, useRef, useEffect } = React;
     const { html } = htmReact;
 
@@ -96,7 +95,8 @@
             </div>
         </form>`;
     }
-    render(html`<${RepoGo} />`, document.getElementById("repo_go"));
+    const root = ReactDOM.createRoot(document.getElementById("repo_go"));
+    root.render(html`<${RepoGo} />`);
 </script>
 
 <style>

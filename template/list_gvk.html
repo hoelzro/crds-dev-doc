@@ -10,7 +10,6 @@
 <script type="module">
     import { formatRelative } from 'https://cdn.jsdelivr.net/npm/date-fns/+esm';
 
-    const { render } = ReactDOM;
     const { html } = htmReact;
     const { useTable, useSortBy, useGlobalFilter  } = ReactTable;
 
@@ -91,7 +90,8 @@
         </div>`;
     }
 
-    render(html`<${RepotagsTable} />`, document.getElementById("repotags"));
+    const root = ReactDOM.createRoot(document.getElementById("repotags"));
+    root.render(html`<${RepotagsTable} />`);
 </script>
 <style>
     #repotags .sort-header {

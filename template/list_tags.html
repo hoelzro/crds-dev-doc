@@ -13,7 +13,6 @@
 <script type="module">
     import { formatRelative } from 'https://cdn.jsdelivr.net/npm/date-fns/+esm';
 
-    const { render } = ReactDOM;
     const { html } = htmReact;
     const { useTable, useSortBy, useGlobalFilter  } = ReactTable;
 
@@ -86,7 +85,8 @@
         </div>`;
     }
 
-    render(html`<${TagsTable} />`, document.getElementById("tags"));
+    const root = ReactDOM.createRoot(document.getElementById("tags"));
+    root.render(html`<${TagsTable} />`);
 </script>
 <style>
     #tags .sort-header {

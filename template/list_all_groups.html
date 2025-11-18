@@ -10,7 +10,6 @@
 <script type="module">
     import { formatRelative } from 'https://cdn.jsdelivr.net/npm/date-fns/+esm';
 
-    const { render } = ReactDOM;
     const { html } = htmReact;
     const { useTable, useSortBy, useGlobalFilter  } = ReactTable;
 
@@ -89,7 +88,8 @@
         </div>`;
     }
 
-    render(html`<${VersionsTable} />`, document.getElementById("versions"));
+    const root = ReactDOM.createRoot(document.getElementById("versions"));
+    root.render(html`<${VersionsTable} />`);
 </script>
 <style>
     #versions .sort-header {

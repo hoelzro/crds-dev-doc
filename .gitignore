@@ -3,3 +3,4 @@ deploy/dns
 cloudsql.json
 .envrc
 .idea
+.vscode
