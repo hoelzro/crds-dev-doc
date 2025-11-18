@@ -19,12 +19,12 @@
 
     const columns = [
         {
-            Header: 'Name',
+            Header: 'Tag',
             accessor: 'Name',
             Cell: ({ row: { original }, value }) => html`<a href=${`/repo/github.com/${Repo}@${original.Name}`}>${value}</a>`
         },
         {
-            Header: 'Timestamp',
+            Header: 'Tagged At',
             accessor: 'Timestamp'
         },
     ];

@@ -22,6 +22,7 @@
         {
             Header: 'Repo',
             accessor: 'Repo',
+            Cell: ({ row: { original }, value }) => html`<a href=${`/repo/${value}`}>${value}</a>`,
         },
         {
             Header: 'Tag',
@@ -29,7 +30,7 @@
             Cell: ({ row: { original }, value }) => html`<a href=${`/repo/${original.Repo}@${original.Tag}`}>${value}</a>`,
         },
         {
-            Header: 'Timestamp',
+            Header: 'Tagged At',
             accessor: 'Timestamp',
         },
     ];
