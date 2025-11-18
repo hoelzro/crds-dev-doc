@@ -59,8 +59,6 @@ var (
 	gitterAddrEnv     = "GITTER_ADDR"
 	defaultGitterAddr = "127.0.0.1:5002"
 
-	cookieDarkMode = "halfmoon_preferredMode"
-
 	gitterAddr        string
 	gitterSemaphore   chan struct{}
 	gitterPingTime    atomic.Int64
@@ -333,12 +331,7 @@ func main() {
 }
 
 func getPageData(r *http.Request, title string, disableNavBar bool) pageData {
-	var isDarkMode = false
-	if cookie, err := r.Cookie(cookieDarkMode); err == nil && cookie.Value == "dark-mode" {
-		isDarkMode = true
-	}
 	return pageData{
-		IsDarkMode:    isDarkMode,
 		DisableNavBar: disableNavBar,
 		Title:         title,
 		IndexerAlive:  gitterIsAlive(),
@@ -704,7 +697,7 @@ type listRecentlyIndexedReposData struct {
 
 func listRecentlyIndexedRepos(w http.ResponseWriter, r *http.Request) {
 	pageData := getPageData(r, "Recently Indexed Repositories", false)
-	rows, err := db.Query(r.Context(), "SELECT t.repo, t.name, t.time FROM tags t ORDER BY t.time DESC LIMIT 20;")
+	rows, err := db.Query(r.Context(), "SELECT t.repo, t.name, t.time FROM tags t WHERE t.alias_tag_id IS NULL ORDER BY t.time DESC LIMIT 20;")
 	if err != nil {
 		logger.Error("failed to get recently indexed repos", "err", err)
 		http.Error(w, "Unable to get recently indexed repositories.", http.StatusInternalServerError)
