@@ -63,12 +63,7 @@ const (
 	dryRunEnv = "GITTER_DRY_RUN"
 )
 
-var (
-	ErrNoTagFound         = errors.New("no tag found in repo")
-	ErrIndexingInProgress = errors.New("indexing already in progress")
-	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
-	ErrRecentFailure      = errors.New("recent failure, retry later")
-)
+var ErrNoTagFound = errors.New("no tag found in repo")
 
 var logger *slog.Logger
 
