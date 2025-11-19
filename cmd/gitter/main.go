@@ -48,12 +48,6 @@ import (
 const (
 	crdArgCount = 6
 
-	userEnv     = "PG_USER"
-	passwordEnv = "PG_PASS"
-	hostEnv     = "PG_HOST"
-	portEnv     = "PG_PORT"
-	dbEnv       = "PG_DB"
-
 	listenAddrEnv     = "GITTER_LISTEN_ADDR"
 	defaultListenAddr = ":5002"
 
@@ -101,10 +95,6 @@ func main() {
 	}))
 
 	dsn := os.Getenv("CRDS_DEV_STORAGE_DSN")
-	if dsn == "" {
-		dsn = fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", os.Getenv(userEnv), os.Getenv(passwordEnv), os.Getenv(hostEnv), os.Getenv(portEnv), os.Getenv(dbEnv))
-	}
-
 	conn, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		logger.Error("failed to parse database config", "err", err)
