@@ -48,12 +48,6 @@ import (
 const (
 	crdArgCount = 6
 
-	userEnv     = "PG_USER"
-	passwordEnv = "PG_PASS"
-	hostEnv     = "PG_HOST"
-	portEnv     = "PG_PORT"
-	dbEnv       = "PG_DB"
-
 	listenAddrEnv     = "GITTER_LISTEN_ADDR"
 	defaultListenAddr = ":5002"
 
@@ -61,18 +55,15 @@ const (
 	maxRuntime  = 1 * time.Minute
 	maxTagAge   = 4 * 365 * 24 * time.Hour // 4 years
 
+	maxCRDsPerTag = 300
+
 	minRetryInterval = 24 * time.Hour
 	maxErrorLength   = 950
 
 	dryRunEnv = "GITTER_DRY_RUN"
 )
 
-var (
-	ErrNoTagFound         = errors.New("no tag found in repo")
-	ErrIndexingInProgress = errors.New("indexing already in progress")
-	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
-	ErrRecentFailure      = errors.New("recent failure, retry later")
-)
+var ErrNoTagFound = errors.New("no tag found in repo")
 
 var logger *slog.Logger
 
@@ -99,10 +90,6 @@ func main() {
 	}))
 
 	dsn := os.Getenv("CRDS_DEV_STORAGE_DSN")
-	if dsn == "" {
-		dsn = fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", os.Getenv(userEnv), os.Getenv(passwordEnv), os.Getenv(hostEnv), os.Getenv(portEnv), os.Getenv(dbEnv))
-	}
-
 	conn, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		logger.Error("failed to parse database config", "err", err)
@@ -403,11 +390,16 @@ func (g *Gitter) doIndex(ctx context.Context, gRepo models.GitterRepo, fullRepo 
 			logger.Info("skipping tag: no CRDs found", "tag", t.name)
 			continue
 		}
+		if len(repoCRDs) > maxCRDsPerTag {
+			return fmt.Errorf("too many CRDs found in tag %s: %d (limit %d)", t.name, len(repoCRDs), maxCRDsPerTag)
+		}
 
 		allArgs := make([]interface{}, 0, len(repoCRDs)*crdArgCount)
 		for _, crd := range repoCRDs {
 			allArgs = append(allArgs, crd.Group, crd.Version, crd.Kind, tagID, crd.Filename, crd.CRD)
 		}
+
+		logger.Info("found CRDs for tag", "tag", t.name, "count", len(repoCRDs))
 		if !g.dryRun {
 			if _, err := g.conn.Exec(ctx, buildInsert("INSERT INTO crds(\"group\", version, kind, tag_id, filename, data) VALUES ", crdArgCount, len(repoCRDs))+"ON CONFLICT DO NOTHING", allArgs...); err != nil {
 				return fmt.Errorf("error inserting CRDs: %s@%s (%v)", repo, t.name, err)
